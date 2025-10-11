@@ -1,0 +1,8 @@
+flask
+flask-cors
+requests
+python-dotenv
+pandas
+numpy
+schedule
+gunicorn
