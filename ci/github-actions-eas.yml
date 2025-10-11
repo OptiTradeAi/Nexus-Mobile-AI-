@@ -1,0 +1,22 @@
+name: Expo EAS build APK
+on:
+  push:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+    - name: Install EAS CLI
+      run: npm install -g eas-cli
+    - name: Build (placeholder - requires EXPO_TOKEN secret)
+      env:
+        EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      run: |
+        cd app
+        eas build --platform android --non-interactive
+# NOTE: configure EXPO_TOKEN secret in repo settings
