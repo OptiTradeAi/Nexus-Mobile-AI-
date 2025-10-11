@@ -1,0 +1,11 @@
+Nexus AI - Versão final do prompt profissional
+
+Objetivo:
+Criar um sistema que faça stream apenas da aba do Home Broker (https://app.homebroker.com/trade), replique/espelhe o gráfico dentro do Nexus AI (visual dentro do app) e rode análise em tempo real. Enviar sinais somente quando a confiança for >= 80%. Registrar histórico (WIN / LOSS). Oferecer fallback mobile (Termux + ADB).
+
+Entregáveis:
+- Extensão (Chrome/Firefox) para captura de aba com permissão explícita do usuário.
+- Backend (FastAPI) com endpoint WSS para receber frames, engine stub com threshold de 0.8 e histórico.
+- App (Expo React Native) com telas de Dashboard/Stream/History, buildável como APK via EAS.
+- Script Termux (termux_stream.py) para enviar screenshots via WebSocket quando getDisplayMedia não for suportado.
+- Documentação completa e CI/EAS template.
