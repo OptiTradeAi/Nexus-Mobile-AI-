@@ -1,0 +1,14 @@
+{
+  "name": "nexus-ai",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android"
+  },
+  "dependencies": {
+    "expo": "~48.0.0",
+    "react": "18.2.0",
+    "react-native": "0.71.8"
+  }
+}
