@@ -1,0 +1,11 @@
+{
+  "manifest_version": 2,
+  "name": "Nexus AI - Tab Streamer",
+  "version": "1.0.0",
+  "description": "Capture uma aba (chart) e rode stream para o backend Nexus AI",
+  "permissions": ["activeTab", "tabs", "storage", "<all_urls>"],
+  "background": { "scripts": ["background.js"], "persistent": false },
+  "browser_action": { "default_popup": "popup.html", "default_title": "Nexus AI Stream" },
+  "content_scripts": [{ "matches": ["<all_urls>"], "js": ["content.js"] }],
+  "icons": { "48": "icon48.png" }
+}
