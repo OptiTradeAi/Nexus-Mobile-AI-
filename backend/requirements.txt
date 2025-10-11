@@ -1,7 +1,0 @@
-fastapi
-uvicorn[standard]
-websockets
-numpy
-pillow
-opencv-python-headless
-python-multipart
