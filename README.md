@@ -1,10 +1,11 @@
-# Nexus AI - Projeto (scaffold)
+# Nexus Mobile AI
+Espelhamento em tempo real da corretora **HomeBroker**, com geração de sinais automáticos apenas se a taxa de acerto > 80%.
 
-Este repositório contém o scaffold do projeto **Nexus AI**:
-- Captura/espelhamento da aba da corretora (extensão)
-- Backend (FastAPI) que recebe frames e emite sinais
-- App mobile (Expo/React Native) para visualizar o espelhamento e sinais
-- Fallback mobile via Termux + ADB screenshots
-- CI template para gerar APK via Expo EAS
+### Funcionalidades:
+- 📡 Recebe candles reais via extensão Kaon CandleReader  
+- 🔄 Espelhamento gráfico idêntico ao da corretora  
+- ⚙️ Backend FastAPI em nuvem (Render)  
+- 📊 Histórico de WIN/LOSS (em desenvolvimento)  
+- 📱 Compatível com mobile e instalação tipo PWA  
 
-Siga `docs/README_INSTALL.md` para o passo-a-passo fácil.
+### Estrutura
