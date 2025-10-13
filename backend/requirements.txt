@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+flask
+flask-cors
+requests
+pandas
+python-dotenv
+schedule
+gunicorn
