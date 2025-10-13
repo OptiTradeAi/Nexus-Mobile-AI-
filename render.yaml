@@ -1,9 +1,0 @@
-services:
-  - type: web
-    name: nexus-mobile-ai
-    env: python
-    buildCommand: pip install -r backend/requirements.txt
-    startCommand: gunicorn -w 2 -k uvicorn.workers.UvicornWorker backend.main:app
-    envVars:
-      - key: PORT
-        value: 8000
