@@ -1,7 +1,0 @@
-fastapi
-uvicorn
-pandas
-requests
-flask
-flask-cors
-gunicorn
