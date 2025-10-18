@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: nexus-mobile-ai
+    env: python
+    plan: free
+    buildCommand: pip install -r backend/requirements_updated.txt
+    startCommand: uvicorn backend.main_updated:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PORT
+        value: 8000
