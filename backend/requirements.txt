@@ -1,0 +1,4 @@
+fastapi==0.119.0
+uvicorn[standard]==0.37.0
+websockets
+python-multipart
