@@ -1,0 +1,75 @@
+<!-- backend/static/viewer.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Nexus Stream Viewer</title>
+  <style>
+    body { margin:0; font-family: Arial, sans-serif; background:#111; color:#eee; display:flex; flex-direction:column; height:100vh; }
+    #top { padding:10px; background:#0b0b0b; display:flex; gap:10px; align-items:center; }
+    #status { font-weight:700; color:#6cdb6c; }
+    #canvasWrap { flex:1; display:flex; align-items:center; justify-content:center; }
+    img#frame { max-width:100%; max-height:100%; display:block; background:#000; }
+    #log { height:80px; overflow:auto; background:#070707; padding:8px; font-size:12px; color:#ccc; }
+    button { padding:6px 10px; border-radius:6px; border:none; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <div id="top">
+    <div id="status">Conexão: desconectado</div>
+    <div id="info">Frames recebidos: <span id="count">0</span></div>
+    <button id="btnReload" onclick="location.reload()">Recarregar</button>
+  </div>
+  <div id="canvasWrap"><img id="frame" src="" alt="Aguardando stream..."></div>
+  <div id="log"></div>
+
+<script>
+const statusEl = document.getElementById('status');
+const countEl = document.getElementById('count');
+const frameImg = document.getElementById('frame');
+const logEl = document.getElementById('log');
+
+let wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/viewer';
+let ws = new WebSocket(wsUrl);
+let frames = 0;
+
+ws.onopen = () => {
+  statusEl.textContent = 'Conexão: conectado';
+  appendLog('Viewer conectado a ' + wsUrl);
+};
+
+ws.onmessage = (ev) => {
+  try {
+    const msg = JSON.parse(ev.data);
+    if(msg.type === 'meta'){
+      appendLog('Meta: ' + JSON.stringify(msg));
+      return;
+    }
+  } catch(e){}
+  // Expect a JSON string with {type:"frame", data:"data:image/png;base64,..."}
+  try {
+    const payload = JSON.parse(ev.data);
+    if(payload && payload.type === 'frame' && payload.data){
+      frameImg.src = payload.data;
+      frames += 1;
+      countEl.textContent = frames;
+    }
+  } catch(e){
+    // If not JSON, ignore
+    appendLog('Mensagem não JSON recebida');
+  }
+};
+
+ws.onclose = () => {
+  statusEl.textContent = 'Conexão: desconectado';
+  appendLog('Viewer desconectado');
+};
+
+function appendLog(t){
+  const p = document.createElement('div');
+  p.textContent = `[${new Date().toLocaleTimeString()}] ${t}`;
+  logEl.prepend(p);
+}
+</script>
+</body>
+</html>
