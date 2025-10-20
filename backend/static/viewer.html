@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Nexus Stream Viewer 🚀</title>
+<style>
+  body { background:#0a0a0a; color:white; font-family:sans-serif; text-align:center; }
+  img { width:95%; margin-top:10px; border-radius:8px; box-shadow:0 0 10px #00ffcc55; }
+</style>
+</head>
+<body>
+  <h2>Nexus Stream Viewer 🚀</h2>
+  <img id="stream" src="" alt="Aguardando stream...">
+  <script>
+    const ws = new WebSocket("wss://" + location.host + "/ws/stream");
+    ws.onmessage = e => {
+      document.getElementById("stream").src = "data:image/png;base64," + e.data;
+    };
+  </script>
+</body>
+</html>
