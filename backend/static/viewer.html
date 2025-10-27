@@ -1,0 +1,111 @@
+<!-- /backend/static/viewer.html -->
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"/>
+  <title>Nexus Stream Viewer</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <style>
+    body { font-family: system-ui, -apple-system, Roboto, "Segoe UI", Arial; margin: 12px; background:#0b0f1a; color:#e6eef8; }
+    .card { background: rgba(255,255,255,0.03); padding: 14px; border-radius: 10px; margin-bottom: 12px; box-shadow: 0 6px 20px rgba(0,0,0,0.6); }
+    h1 { margin: 0 0 8px 0; font-size: 20px; }
+    #frame { width: 100%; max-width: 800px; height: auto; background: #111827; border-radius: 8px; display:block; margin-bottom:8px; }
+    .signal { padding:8px; border-radius:6px; margin-bottom:8px; }
+    .CALL { background: linear-gradient(90deg,#052e11,#064e2a); color:#a7f3d0;}
+    .PUT { background: linear-gradient(90deg,#2b021e,#4b002f); color:#ffccd5;}
+    .NONE { background: rgba(255,255,255,0.02); color:#cbd5e1; }
+    table { width:100%; border-collapse: collapse; }
+    td, th { padding:6px; text-align:left; border-bottom:1px solid rgba(255,255,255,0.03); }
+    .muted { color:#9aa7b8; font-size:13px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Nexus Stream Viewer</h1>
+    <div id="status" class="muted">Conectando...</div>
+  </div>
+
+  <div class="card">
+    <img id="frame" src="" alt="Frame stream (se disponível)"/>
+    <div id="last-analysis" class="muted">Nenhuma análise recebida ainda.</div>
+  </div>
+
+  <div class="card">
+    <h3>Sinais recentes</h3>
+    <div id="signals"></div>
+  </div>
+
+  <div class="card">
+    <h3>Histórico (pares detectados)</h3>
+    <div id="pairs" class="muted"></div>
+  </div>
+
+<script>
+  const statusEl = document.getElementById("status");
+  const frameEl = document.getElementById("frame");
+  const lastAnalysisEl = document.getElementById("last-analysis");
+  const signalsEl = document.getElementById("signals");
+  const pairsEl = document.getElementById("pairs");
+
+  // Build ws URL
+  const loc = window.location;
+  const wsProtocol = loc.protocol === "https:" ? "wss://" : "ws://";
+  const wsUrl = wsProtocol + loc.host + "/ws/viewer";
+  let ws = null;
+
+  function addSignal(s) {
+    const div = document.createElement("div");
+    div.className = "signal " + (s.decision || "NONE");
+    div.innerHTML = `<strong>${s.decision}</strong> — ${s.pair} — conf: ${s.confidence} — ${new Date(s.timestamp).toLocaleTimeString()} <br/><span class="muted">${s.explanation || ""}</span>`;
+    signalsEl.prepend(div);
+    // keep last 30
+    if (signalsEl.children.length > 50) signalsEl.removeChild(signalsEl.lastChild);
+  }
+
+  function setAnalysis(a) {
+    lastAnalysisEl.innerHTML = `
+      <strong>${a.pair}</strong> — decisão: ${a.analysis.decision} — conf: ${a.analysis.confidence} — tempo pra abrir: ${a.analysis.time_to_open}s
+      <div class="muted">${a.analysis.explanation}</div>
+    `;
+  }
+
+  function connect() {
+    ws = new WebSocket(wsUrl);
+    ws.onopen = () => {
+      statusEl.textContent = "Conectado ao backend (viewer)";
+      statusEl.style.color = "#7ee787";
+    };
+    ws.onmessage = (ev) => {
+      try {
+        const obj = JSON.parse(ev.data);
+        if (obj.type === "frame") {
+          // show base64 image
+          frameEl.src = "data:image/jpeg;base64," + obj.data;
+        } else if (obj.type === "analysis") {
+          setAnalysis(obj);
+        } else if (obj.type === "signal") {
+          addSignal(obj.signal);
+        } else if (obj.type === "history_summary") {
+          pairsEl.textContent = (obj.pairs || []).join(", ");
+        } else if (obj.type === "status") {
+          // show brief status
+          statusEl.textContent = obj.msg || "status";
+        }
+      } catch (e) {
+        console.error("Invalid WS payload", e);
+      }
+    };
+    ws.onclose = () => {
+      statusEl.textContent = "Desconectado. Tentando reconectar em 3s...";
+      statusEl.style.color = "#ffb4b4";
+      setTimeout(connect, 3000);
+    };
+    ws.onerror = (e) => {
+      console.error("WS error", e);
+    };
+  }
+
+  connect();
+</script>
+</body>
+</html>
