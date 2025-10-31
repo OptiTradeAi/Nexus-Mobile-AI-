@@ -1,0 +1,76 @@
+<!-- backend/static/viewer.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Nexus Viewer</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <style>
+    body{font-family:system-ui,Arial;margin:0;background:#0b1220;color:#e6eef8;display:flex;flex-direction:column;height:100vh}
+    header{padding:12px;background:#071029;display:flex;align-items:center;gap:12px}
+    #status{font-weight:700}
+    #container{flex:1; display:flex; gap:12px; padding:12px}
+    #videoBox{flex:2; background:#071029; border-radius:8px; padding:8px; display:flex; align-items:center; justify-content:center}
+    img#streamImg{max-width:100%; max-height:100%; border-radius:6px; box-shadow:0 6px 20px rgba(0,0,0,0.6)}
+    #side{width:360px; background:#071029; border-radius:8px; padding:12px; overflow:auto}
+    .signal{padding:8px;border-radius:6px;margin-bottom:8px;background:#042435}
+    .signal.win{border-left:4px solid #10b981}
+    .signal.loss{border-left:4px solid #ef4444}
+  </style>
+</head>
+<body>
+  <header>
+    <div id="status">Conectando ao servidor...</div>
+    <div style="margin-left:auto">Nexus Viewer</div>
+  </header>
+  <div id="container">
+    <div id="videoBox">
+      <img id="streamImg" src="" alt="Awaiting stream...">
+    </div>
+    <aside id="side">
+      <h3>Sinais (>= 0.8)</h3>
+      <div id="signals"></div>
+      <h3>Log</h3>
+      <div id="log"></div>
+    </aside>
+  </div>
+
+<script>
+(function(){
+  const statusEl = document.getElementById('status');
+  const img = document.getElementById('streamImg');
+  const signals = document.getElementById('signals');
+  const log = document.getElementById('log');
+
+  const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/viewer';
+  let ws = null;
+
+  function addLog(t){ const d = document.createElement('div'); d.textContent = '['+new Date().toLocaleTimeString()+'] '+t; log.prepend(d); }
+  function addSignal(s){
+    const el = document.createElement('div');
+    el.className = 'signal';
+    el.innerHTML = `<b>${s.signal}</b> - conf ${s.confidence}<br><small>${s.timestamp}</small>`;
+    signals.prepend(el);
+  }
+
+  function connect(){
+    ws = new WebSocket(WS_URL);
+    ws.onopen = ()=>{ statusEl.textContent = 'Viewer conectado'; addLog('viewer connected'); }
+    ws.onclose = ()=>{ statusEl.textContent = 'Viewer desconectado, reconectando...'; addLog('viewer closed'); setTimeout(connect,1500); }
+    ws.onerror = (e)=>{ addLog('viewer error'); }
+    ws.onmessage = (ev)=>{
+      try{
+        const m = JSON.parse(ev.data);
+        if(m.type === 'frame'){ img.src = 'data:image/jpeg;base64,'+m.data; addLog('frame rec'); }
+        if(m.type === 'signal'){ addSignal(m.data); addLog('signal: '+m.data.signal+' conf:'+m.data.confidence); }
+        if(m.type === 'candle'){ addLog('candle rec'); }
+      }catch(e){
+        addLog('bad msg');
+      }
+    }
+  }
+  connect();
+})();
+</script>
+</body>
+</html>
