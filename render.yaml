@@ -1,7 +1,0 @@
-services:
-  - type: web
-    name: nexus-mobile-ai
-    env: docker
-    plan: free
-    dockerfilePath: backend/Dockerfile
-    autoDeploy: true
