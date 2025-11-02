@@ -1,9 +1,0 @@
-services:
-  - type: web
-    name: nexus-mobile-ai
-    env: docker
-    dockerfilePath: backend/Dockerfile
-    autoDeploy: true
-    envVars:
-      - key: PYTHONUNBUFFERED
-        value: "1"
