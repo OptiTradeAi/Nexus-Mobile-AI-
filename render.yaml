@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: nexus-mobile-ai
+    env: docker
+    dockerfilePath: backend/Dockerfile
+    # Se preferir que Render controle a porta via $PORT, descomente a linha abaixo:
+    # startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    autoDeploy: true
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
