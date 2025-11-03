@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Nexus Live Viewer</title>
+  <style>
+    body{background:#111;color:#fff;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;padding:20px}
+    img{max-width:100%;border:1px solid #444;box-shadow:0 6px 18px rgba(0,0,0,0.6)}
+    #st{font-weight:700}
+  </style>
+</head>
+<body>
+  <h2>Nexus Live Viewer</h2>
+  <div>Conexão: <span id="st">—</span></div>
+  <img id="live" src="" alt="waiting for frames" />
+  <script>
+    const WS_TOKEN = 'd33144d6cb84fe05bf38bb9f22591683'; // <<-- seu token
+    const WS_URL = `wss://nexus-mobile-ai.onrender.com/ws?token=${WS_TOKEN}`;
+    const st = document.getElementById('st');
+    const live = document.getElementById('live');
+    let ws = null;
+    function connect(){
+      ws = new WebSocket(WS_URL);
+      ws.onopen = ()=>{ st.textContent='Conectado'; st.style.color='lightgreen'; console.log('WS open'); };
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if(msg.type === 'frame' && msg.data_b64){
+            live.src = 'data:image/jpeg;base64,' + msg.data_b64;
+          } else {
+            console.log('WS msg', msg);
+          }
+        } catch(e){
+          console.log('WS non-json', e);
+        }
+      };
+      ws.onclose = ()=>{ st.textContent='Desconectado'; st.style.color='orange'; setTimeout(connect, 2000); };
+      ws.onerror = (e)=>{ st.textContent='Erro'; st.style.color='red'; console.error(e); };
+    }
+    connect();
+  </script>
+</body>
+</html>
