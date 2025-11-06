@@ -1,0 +1,97 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Nexus Mobile Viewer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body{margin:0;background:#0b0b0b;color:#fff;font-family:Arial,Helvetica,sans-serif}
+    header{padding:10px;background:#111;border-bottom:1px solid #222}
+    #wrap{display:flex;flex-direction:column;gap:8px;padding:10px}
+    #live{width:100%;height:auto;border:1px solid #333;background:#000}
+    .info{font-size:14px;color:#bbb}
+    #signals{margin-top:8px}
+    .card{background:#121212;border:1px solid #292929;padding:8px;margin-bottom:8px;border-radius:6px}
+    .card .meta{font-size:12px;color:#9aa}
+    button{background:#1a73e8;color:white;border:0;padding:6px 10px;border-radius:4px}
+  </style>
+</head>
+<body>
+  <header><strong>Nexus Mobile Viewer</strong></header>
+  <div id="wrap">
+    <div class="info">Conexão: <span id="st">—</span> | Pair: <span id="pair">—</span> | RID: <span id="rid">—</span> | Método: <span id="method">—</span></div>
+    <img id="live" src="" alt="waiting for frames" />
+    <div id="signals"><h4>Sinais</h4></div>
+  </div>
+
+<script>
+const WS_TOKEN = 'd33144d6cb84fe05bf38bb9f22591683';
+const WS_URL = `wss://nexus-mobile-ai.onrender.com/ws?token=${WS_TOKEN}`;
+let ws = null;
+const st = document.getElementById('st');
+const pairEl = document.getElementById('pair');
+const ridEl = document.getElementById('rid');
+const methodEl = document.getElementById('method');
+const live = document.getElementById('live');
+const signalsDiv = document.getElementById('signals');
+let lastBlobUrl = null;
+
+function connect(){
+  ws = new WebSocket(WS_URL);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = ()=>{ st.textContent='Conectado'; st.style.color='lightgreen'; console.log('WS open'); };
+  ws.onmessage = (ev) => {
+    if (ev.data instanceof ArrayBuffer) {
+      const blob = new Blob([ev.data], {type: 'image/jpeg'});
+      if (lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
+      lastBlobUrl = URL.createObjectURL(blob);
+      live.src = lastBlobUrl;
+      return;
+    }
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'frame' || msg.type === 'frame_binary') {
+        const m = msg;
+        if (m.pair || (m.meta && m.meta.pair)) pairEl.textContent = m.pair || m.meta.pair || '—';
+        if (m.rid) ridEl.textContent = m.rid;
+        if (m.method || (m.meta && m.meta.method)) methodEl.textContent = m.method || m.meta.method || '—';
+      } else if (msg.type === 'signal') {
+        const sig = msg.signal;
+        addSignalCard(sig);
+      } else {
+        console.log('WS msg', msg);
+      }
+    } catch(e){
+      console.log('WS non-json msg', e);
+    }
+  };
+  ws.onclose = ()=>{ st.textContent='Desconectado'; st.style.color='orange'; setTimeout(connect, 2000); };
+  ws.onerror = (e)=>{ st.textContent='Erro'; st.style.color='red'; console.error(e); };
+}
+connect();
+
+function addSignalCard(sig){
+  const c = document.createElement('div');
+  c.className = 'card';
+  c.innerHTML = `<div><strong>${sig.action}</strong> ${sig.pair} ・ ${sig.timeframe}</div>
+    <div class="meta">Abertura: ${new Date(sig.open_ts*1000).toLocaleString()} ・ Confiança: ${(sig.confidence||0).toFixed(2)}</div>
+    <div style="margin-top:6px">${sig.reason || ''}</div>
+    <div style="margin-top:6px">
+      ${sig.audio_url ? `<button onclick="playAudio('${sig.audio_url}')">Ouvir</button>` : ''}
+      <button onclick="showPreview('${sig.preview_image||''}')">Preview</button>
+    </div>`;
+  signalsDiv.insertBefore(c, signalsDiv.firstChild);
+}
+
+function playAudio(url){
+  if(!url) return;
+  const a = new Audio(url);
+  a.play().catch(e=>console.error(e));
+}
+function showPreview(url){
+  if(!url) { alert('Sem preview'); return; }
+  window.open(url, '_blank');
+}
+</script>
+</body>
+</html>
