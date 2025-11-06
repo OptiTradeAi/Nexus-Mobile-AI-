@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+pillow
+gTTS
+pydantic
+python-multipart
+aiofiles
+websockets
