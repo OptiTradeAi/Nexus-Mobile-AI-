@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+pandas
+python-dateutil
+websockets
+watchfiles
+uvloop
