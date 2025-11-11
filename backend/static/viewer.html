@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Nexus Mobile AI - Visualização em Tempo Real</title>
+  <style>
+    body {
+      background: #0a0a0f;
+      color: #e0e0e0;
+      font-family: system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      margin: 0;
+      height: 100vh;
+      overflow: hidden;
+    }
+    header {
+      text-align: center;
+      padding: 12px;
+      background: linear-gradient(90deg, #0d9488, #2563eb);
+      width: 100%;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    }
+    header h1 {
+      margin: 0;
+      font-size: 20px;
+      color: #fff;
+    }
+    #status {
+      margin-top: 6px;
+      font-size: 13px;
+      color: #b3f0ff;
+    }
+    #viewer {
+      margin-top: 20px;
+      width: 90%;
+      max-width: 960px;
+      aspect-ratio: 16/9;
+      background: #111;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 0 12px rgba(0,0,0,0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+    #viewer img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+    }
+    #pair {
+      position: absolute;
+      top: 8px;
+      left: 12px;
+      color: #00eaff;
+      font-weight: bold;
+      background: rgba(0,0,0,0.6);
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    #timestamp {
+      position: absolute;
+      bottom: 8px;
+      right: 12px;
+      color: #ccc;
+      background: rgba(0,0,0,0.5);
+      padding: 3px 6px;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Nexus Mobile AI - Stream do Gráfico</h1>
+    <div id="status">⏳ Aguardando conexão...</div>
+  </header>
+  <div id="viewer">
+    <span id="pair">—</span>
+    <img id="chart" src="" alt="Stream não iniciado">
+    <span id="timestamp">—</span>
+  </div>
+
+  <script>
+    const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/viewer';
+    const statusEl = document.getElementById('status');
+    const imgEl = document.getElementById('chart');
+    const pairEl = document.getElementById('pair');
+    const timeEl = document.getElementById('timestamp');
+
+    let ws;
+
+    function connectWS() {
+      ws = new WebSocket(wsUrl);
+      ws.onopen = () => {
+        statusEl.textContent = "✅ Conectado ao stream";
+        statusEl.style.color = "#7CFC00";
+      };
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'frame' && msg.data) {
+            imgEl.src = "data:image/jpeg;base64," + msg.data;
+            pairEl.textContent = msg.pair || "Gráfico ativo";
+            timeEl.textContent = new Date().toLocaleTimeString("pt-BR");
+          }
+        } catch (e) {
+          console.error("Erro ao decodificar frame:", e);
+        }
+      };
+      ws.onclose = () => {
+        statusEl.textContent = "🔄 Reconectando...";
+        statusEl.style.color = "#ffcc00";
+        setTimeout(connectWS, 3000);
+      };
+      ws.onerror = (err) => {
+        console.error("WS erro:", err);
+        ws.close();
+      };
+    }
+
+    connectWS();
+  </script>
+</body>
+</html>
