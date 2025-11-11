@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Nexus Viewer</title>
+  <style>
+    body{background:#0f1620;color:#fff;font-family:system-ui;margin:0;padding:0}
+    header{background:linear-gradient(90deg,#1fb6ff,#6e44ff);padding:12px;text-align:center}
+    #status{margin-top:6px;color:#bfe;}
+    #frameBox{display:flex;justify-content:center;align-items:center;height:80vh}
+    #frameImg{max-width:95%;max-height:95%;background:#000}
+    #log{position:fixed;right:8px;bottom:8px;width:320px;height:150px;overflow:auto;background:rgba(0,0,0,0.6);padding:8px;border-radius:8px;font-size:12px}
+  </style>
+</head>
+<body>
+  <header>
+    <h2>Nexus Mobile AI - Stream do Gráfico</h2>
+    <div id="status">Conectando...</div>
+  </header>
+  <div id="frameBox">
+    <img id="frameImg" src="" alt="Aguardando stream"/>
+  </div>
+  <div id="log"></div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const img = document.getElementById('frameImg');
+    const logEl = document.getElementById('log');
+    const wsUrl = (location.protocol==='https:'?'wss://':'ws://') + location.host + '/ws/viewer';
+    let ws = new WebSocket(wsUrl);
+    ws.onopen = ()=>{ statusEl.textContent = 'Conectado ao stream'; addLog('viewer connected'); };
+    ws.onclose = ()=>{ statusEl.textContent = 'Conexão fechada'; addLog('viewer closed'); setTimeout(()=>location.reload(),3000); };
+    ws.onerror = (e)=>{ addLog('viewer error'); };
+    ws.onmessage = (ev)=>{
+      try{
+        const msg = JSON.parse(ev.data);
+        if(msg.type === 'frame' && msg.data){
+          img.src = 'data:' + (msg.mime||'image/jpeg') + ';base64,' + msg.data;
+          addLog('frame ' + (msg.pair||'') + ' ' + (new Date(msg.ts||Date.now())).toLocaleTimeString());
+        } else {
+          // maybe other payload
+          addLog('json: ' + (msg.type || JSON.stringify(msg).slice(0,60)));
+        }
+      } catch(e){
+        addLog('onmessage parse error');
+      }
+    };
+    function addLog(t){
+      const Ln = document.createElement('div'); Ln.textContent = (new Date()).toLocaleTimeString() + ' - ' + t;
+      logEl.prepend(Ln);
+      if(logEl.childNodes.length>200) logEl.removeChild(logEl.lastChild);
+    }
+  </script>
+</body>
+</html>
