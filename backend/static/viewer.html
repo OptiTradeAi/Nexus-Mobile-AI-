@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<title>Nexus Mobile AI - Visual Stream</title>
+<style>
+  body { background:#0b0b12; color:#0f0; font-family:sans-serif; margin:0; display:flex; flex-direction:column; align-items:center; }
+  h1 { color:#00ffff; font-size:18px; margin:10px; }
+  #img { max-width:95vw; max-height:80vh; border:2px solid #00ffea; border-radius:12px; margin-top:10px; box-shadow:0 0 20px rgba(0,255,255,0.3);}
+  #status { margin-top:8px; font-size:12px; color:#fff; }
+</style>
+</head>
+<body>
+  <h1>📈 Nexus Mobile AI - Gráfico em Tempo Real</h1>
+  <img id="img" src="" alt="Aguardando stream..."/>
+  <div id="status">⏳ Aguardando conexão...</div>
+
+  <script>
+  const ws = new WebSocket("wss://nexus-mobile-ai.onrender.com/ws/stream");
+  const imgEl = document.getElementById("img");
+  const statusEl = document.getElementById("status");
+  let last = 0;
+
+  ws.onopen = () => { statusEl.textContent = "🟢 Conectado ao stream"; };
+  ws.onclose = () => { statusEl.textContent = "🔴 Desconectado"; };
+  ws.onerror = e => { statusEl.textContent = "⚠️ Erro: " + e.message; };
+
+  ws.onmessage = (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      if (data.type === "frame" && data.data) {
+        imgEl.src = "data:" + (data.mime || "image/jpeg") + ";base64," + data.data;
+        last = Date.now();
+        statusEl.textContent = "🟢 Recebendo stream...";
+      }
+    } catch(e) {
+      console.log("Mensagem WS não reconhecida:", ev.data);
+    }
+  };
+  </script>
+</body>
+</html>
