@@ -1,30 +1,31 @@
-from fastapi import FastAPI, WebSocket, Request, Query, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+# backend/main.py
+from fastapi import FastAPI, WebSocket, Query, WebSocketDisconnect, Body
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-import asyncio, json, base64
+import asyncio, json, base64, os
 from datetime import datetime
 import pytz
-import os
 
-from .ai_engine_fusion import analyze_frame # Importa corretamente
+# importa o motor de análise (assume que ai_engine_fusion.py está no mesmo diretório)
+from ai_engine_fusion import analyze_frame_with_meta
 
 app = FastAPI(title="Nexus Mobile AI Stream Server")
 TZ = pytz.timezone("America/Sao_Paulo")
 
-# --- Configuração de CORS ---
-# Permite acesso de qualquer origem. Em produção, restrinja a domínios específicos.
+# CORS - em produção restrinja allow_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Permite todas as origens para facilitar o desenvolvimento
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Static Files e Viewer ---
-# Monta a pasta 'static' para servir arquivos como viewer.html
-app.mount("/static", StaticFiles(directory="backend/static"), name="static")
+# Serve arquivos estáticos (viewer.html etc.)
+STATIC_DIR = "backend/static"
+os.makedirs(STATIC_DIR, exist_ok=True)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.get("/")
 async def root():
@@ -39,101 +40,192 @@ async def root():
 async def health():
     return {"status": "ok", "time": datetime.now(TZ).isoformat()}
 
-# --- Autenticação (opcional) ---
-# Defina um token seguro como variável de ambiente no Render (ex: NEXUS_WS_TOKEN)
-# Se não definido, a autenticação é desabilitada.
+# Opcional: variável de ambiente para token
 AUTH_TOKEN = os.environ.get("NEXUS_WS_TOKEN", "")
 
-# --- Gerenciamento de Conexões WebSocket ---
-stream_clients = set() # Clientes que enviam o stream (userscript)
-viewer_clients = set() # Clientes que recebem o stream (seu viewer.html)
+stream_clients = set()
+viewer_clients = set()
 
-# --- WebSocket para o Userscript (envia frames) ---
+DEBUG_SAVE_PATH = os.path.join(STATIC_DIR, "latest_frame.webp")
+
 @app.websocket("/ws/stream")
 async def websocket_stream_endpoint(websocket: WebSocket, token: str = Query(None)):
+    # Autenticação simples (opcional)
     if AUTH_TOKEN and token != AUTH_TOKEN:
-        print(f"🚫 Conexão de stream recusada: token inválido de {websocket.client.host}")
-        await websocket.close(code=1008) # Código 1008 indica violação de política
+        await websocket.close(code=1008)
+        print("Conexão stream recusada: token inválido")
         return
 
     await websocket.accept()
     stream_clients.add(websocket)
-    print(f"🟢 Streamer conectado: {websocket.client.host}")
+    client_addr = getattr(websocket.client, "host", "unknown")
+    print(f"🟢 Streamer conectado: {client_addr}")
 
     try:
         while True:
-            message = await websocket.receive() # Recebe mensagem (pode ser texto ou bytes)
+            msg = await websocket.receive()  # pode conter 'text' ou 'bytes'
+            frame_b64 = None
+            mime = "image/webp"
+            pair = "AUTO"
+            payload = None
 
-            frame_data = None
-            mime_type = "image/webp" # Padrão para o userscript
-
-            if "text" in message and message["text"]:
-                # Mensagem de texto (JSON com base64)
+            if "text" in msg and msg["text"]:
+                # espera JSON com {type:'frame', data: '<base64>', current_price, next_candle_seconds, ...}
                 try:
-                    payload = json.loads(message["text"])
+                    payload = json.loads(msg["text"])
                     if payload.get("type") == "frame" and payload.get("data"):
-                        frame_data = payload["data"] # Já é base64
-                        mime_type = payload.get("mime", "image/webp")
-                except json.JSONDecodeError:
-                    print(f"⚠️ Streamer {websocket.client.host} enviou JSON inválido.")
+                        frame_b64 = payload.get("data")
+                        mime = payload.get("mime", mime)
+                        pair = payload.get("pair", pair)
+                        print(f"📥 Frame recebido (texto) pair={pair} size={len(frame_b64)}")
+                except Exception as e:
+                    print("⚠️ JSON inválido recebido no stream:", e)
                     continue
-            elif "bytes" in message and message["bytes"]:
-                # Mensagem binária (blob direto)
-                # Se o userscript enviar binário, ele precisa enviar o mime-type separadamente
-                # ou o backend precisa inferir. Por simplicidade, assumimos webp.
-                frame_data = base64.b64encode(message["bytes"]).decode("utf-8")
-                mime_type = "image/webp" # Assumimos WebP para binário
 
-            if frame_data:
-                # Analisa o frame (ai_engine_fusion)
-                analysis_result = analyze_frame(frame_data, mime=mime_type)
+            elif "bytes" in msg and msg["bytes"]:
+                try:
+                    frame_bytes = msg["bytes"]
+                    frame_b64 = base64.b64encode(frame_bytes).decode("utf-8")
+                    mime = "image/webp"
+                    print(f"📥 Frame recebido (bytes) size={len(frame_bytes)}")
+                    payload = {"type": "frame", "data": frame_b64, "mime": mime, "pair": pair, "timestamp": datetime.now(TZ).isoformat()}
+                except Exception as e:
+                    print("⚠️ Erro ao tratar bytes do stream:", e)
+                    continue
 
-                # Prepara o pacote para os viewers
-                viewer_packet = {
-                    "type": "frame",
-                    "data": frame_data, # Envia base64 para o viewer
-                    "mime": mime_type,
-                    "analysis": analysis_result,
-                    "timestamp": datetime.now(TZ).isoformat()
-                }
+            if not frame_b64:
+                await asyncio.sleep(0.001)
+                continue
 
-                # Broadcast para todos os viewers conectados
-                for client in list(viewer_clients):
+            # Salva um frame de debug (somente sobrescreve)
+            try:
+                with open(DEBUG_SAVE_PATH, "wb") as f:
+                    f.write(base64.b64decode(frame_b64))
+                print(f"💾 Debug: frame salvo em {DEBUG_SAVE_PATH}")
+            except Exception as e:
+                print("⚠️ Falha ao salvar debug frame:", e)
+
+            # Chama o motor de análise (passa payload completo se disponível)
+            try:
+                if payload is None:
+                    payload = {"type": "frame", "data": frame_b64, "mime": mime, "pair": pair, "timestamp": datetime.now(TZ).isoformat()}
+                analysis_result = analyze_frame_with_meta(payload)
+            except Exception as e:
+                analysis_result = {"ok": False, "error": str(e)}
+                print("⚠️ analyze_frame_with_meta gerou erro:", e)
+
+            # Monta pacote para viewers
+            packet = {
+                "type": "frame",
+                "data": frame_b64,
+                "mime": mime,
+                "pair": pair,
+                "timestamp": payload.get("timestamp", datetime.now(TZ).isoformat()),
+                "analysis": analysis_result.get("analysis") if isinstance(analysis_result, dict) else analysis_result
+            }
+
+            # Broadcast para viewers
+            for v in list(viewer_clients):
+                try:
+                    await v.send_json(packet)
+                except Exception as e:
+                    print("🔴 Erro enviando para viewer, removendo:", e)
                     try:
-                        await client.send_json(viewer_packet)
-                    except Exception:
-                        print(f"🔴 Viewer desconectado durante broadcast: {client.client.host}")
-                        viewer_clients.remove(client)
-            await asyncio.sleep(0.001) # Pequena pausa para não bloquear o loop de eventos
+                        viewer_clients.remove(v)
+                    except:
+                        pass
+
+            await asyncio.sleep(0.001)
 
     except WebSocketDisconnect:
-        print(f"🔴 Streamer desconectado: {websocket.client.host}")
+        print(f"🔴 Streamer desconectado: {client_addr}")
     except Exception as e:
-        print(f"❌ Erro no stream de {websocket.client.host}: {e}")
+        print("❌ Erro no websocket stream:", e)
     finally:
-        stream_clients.remove(websocket)
+        try:
+            stream_clients.remove(websocket)
+        except:
+            pass
 
-# --- WebSocket para o Viewer (recebe frames) ---
 @app.websocket("/ws/viewer")
 async def websocket_viewer_endpoint(websocket: WebSocket):
     await websocket.accept()
     viewer_clients.add(websocket)
-    print(f"🟢 Viewer conectado: {websocket.client.host}")
+    client_addr = getattr(websocket.client, "host", "unknown")
+    print(f"🟢 Viewer conectado: {client_addr}")
 
     try:
         while True:
-            # Viewers não enviam dados, apenas recebem.
-            # Mantemos o loop para a conexão permanecer aberta.
-            await websocket.receive_text() # Apenas para manter a conexão viva, ignora o que for enviado
+            # Mantém a conexão aberta; permite viewer enviar comandos que serão repassados aos streamers
+            try:
+                msg = await websocket.receive_text()
+                try:
+                    j = json.loads(msg)
+                    if j.get("type") == "command_to_stream":
+                        cmd_payload = j.get("command", {})
+                        for s in list(stream_clients):
+                            try:
+                                await s.send_text(json.dumps(cmd_payload))
+                            except Exception:
+                                try: stream_clients.remove(s)
+                                except: pass
+                except Exception:
+                    # ignora mensagens não-JSON
+                    pass
+            except Exception:
+                # sem mensagem de texto, apenas continue
+                await asyncio.sleep(0.1)
     except WebSocketDisconnect:
-        print(f"🔴 Viewer desconectado: {websocket.client.host}")
+        print(f"🔴 Viewer desconectado: {client_addr}")
     except Exception as e:
-        print(f"❌ Erro no viewer de {websocket.client.host}: {e}")
+        print("❌ Erro no websocket viewer:", e)
     finally:
-        viewer_clients.remove(websocket)
+        try:
+            viewer_clients.remove(websocket)
+        except:
+            pass
 
-# --- Rota para o viewer.html ---
 @app.get("/viewer")
 async def get_viewer_page():
-    # Serve o viewer.html diretamente da pasta static
-    return FileResponse("backend/static/viewer.html", media_type="text/html")
+    p = os.path.join(STATIC_DIR, "viewer.html")
+    if os.path.isfile(p):
+        return FileResponse(p, media_type="text/html")
+    return JSONResponse({"error": "viewer.html não encontrado"}, status_code=404)
+
+# HTTP endpoints para controlar streamers (útil para UI/admin)
+@app.post("/control/pairs")
+async def control_pairs(body: dict = Body(...)):
+    """
+    Body esperado: {"pairs": ["PETR4","VALE3",...], "interval": 2000}
+    Envia comando para todos streamers: {type:'command', cmd:'set_pairs', pairs: [...], interval: N}
+    """
+    pairs = body.get("pairs", [])
+    interval = int(body.get("interval", 2000))
+    cmd = {"type": "command", "cmd": "set_pairs", "pairs": pairs, "interval": interval}
+    sent = 0
+    for s in list(stream_clients):
+        try:
+            await s.send_text(json.dumps(cmd))
+            sent += 1
+        except Exception:
+            try: stream_clients.remove(s)
+            except: pass
+    return {"sent_to_streamers": sent, "pairs_count": len(pairs)}
+
+@app.post("/control/command")
+async def control_command(body: dict = Body(...)):
+    """
+    Body exemplo: {"cmd":"start_cycle"} ou {"cmd":"change_pair","pair":"PETR4"}
+    Repassa o comando para os streamers.
+    """
+    cmd_body = body.copy()
+    cmd = {"type": "command", "cmd": cmd_body.get("cmd"), **({k:v for k,v in cmd_body.items() if k!="cmd"})}
+    sent = 0
+    for s in list(stream_clients):
+        try:
+            await s.send_text(json.dumps(cmd))
+            sent += 1
+        except Exception:
+            try: stream_clients.remove(s)
+            except: pass
+    return {"sent": sent, "cmd": cmd}
