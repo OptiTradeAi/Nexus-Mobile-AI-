@@ -1,42 +1,124 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
+<!doctype html>
+<html>
 <head>
-  <meta charset="UTF-8">
+  <meta charset="utf-8" />
   <title>Nexus Mobile AI - Viewer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { background: #0b0e17; margin: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; flex-direction: column; color: white; font-family: sans-serif; }
-    #canvas { border: 2px solid #0ff; border-radius: 10px; max-width: 95vw; max-height: 80vh; }
-    #status { margin-top: 10px; color: #0ff; font-size: 14px; }
+    body { margin:0; background:#0b0b0b; color:#fff; font-family:Arial,Helvetica,sans-serif; }
+    header { padding:10px; background:#111; border-bottom:1px solid #222; text-align: center; }
+    #wrap { display:flex; flex-direction:column; gap:8px; padding:10px; max-width: 900px; margin: 0 auto; }
+    #live { width:100%; height:auto; border:1px solid #333; background:#000; display: block; }
+    .info { font-size:14px; color:#bbb; display: flex; justify-content: space-between; flex-wrap: wrap; }
+    .info span { margin-right: 10px; }
+    #analysis-results { margin-top: 10px; padding: 10px; background: #1a1a1a; border-radius: 5px; }
+    #analysis-results h4 { margin-top: 0; color: #00e676; }
+    #analysis-results p { margin: 5px 0; }
+    #log { background: rgba(0,0,0,0.5); padding: 5px; max-height: 100px; overflow-y: auto; font-size: 12px; border-radius: 4px; margin-top: 10px; }
   </style>
 </head>
 <body>
-  <h3>Nexus Mobile AI - Stream Viewer</h3>
-  <canvas id="canvas"></canvas>
-  <div id="status">Conectando...</div>
+  <header><strong>Nexus Mobile AI - Viewer</strong></header>
+  <div id="wrap">
+    <div class="info">
+      <span>Conexão: <span id="st">—</span></span>
+      <span>Par: <span id="pair">—</span></span>
+      <span>Último Frame: <span id="last-frame-time">—</span></span>
+    </div>
+    <img id="live" src="" alt="Aguardando frames" />
+    <div id="analysis-results">
+      <h4>Análise do Frame:</h4>
+      <p>Brilho: <span id="brightness">--</span></p>
+      <p>Contraste: <span id="contrast">--</span></p>
+      <p>Sinal: <span id="signal-type">--</span> (Confiança: <span id="signal-confidence">--</span>)</p>
+    </div>
+    <div id="log"></div>
+  </div>
 
-  <script>
-    const ws = new WebSocket(`wss://${window.location.host}/ws/stream`);
-    const canvas = document.getElementById("canvas");
-    const ctx = canvas.getContext("2d");
-    const statusEl = document.getElementById("status");
+<script>
+const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/viewer';
+let ws = null;
 
-    ws.onopen = () => { statusEl.textContent = "Conectado ao stream 🔵"; };
-    ws.onmessage = (ev) => {
-      const msg = JSON.parse(ev.data);
-      if (msg.type === "frame" && msg.data) {
-        const img = new Image();
-        img.onload = () => {
-          canvas.width = img.width;
-          canvas.height = img.height;
-          ctx.drawImage(img, 0, 0);
-        };
-        img.src = "data:image/jpeg;base64," + msg.data;
-        if (msg.analysis) {
-          statusEl.textContent = `Par: ${msg.analysis.pair} | Candles visuais: ${msg.analysis.visual.candles_detected}`;
-        }
-      }
+const st = document.getElementById('st');
+const pairEl = document.getElementById('pair');
+const lastFrameTimeEl = document.getElementById('last-frame-time');
+const liveImg = document.getElementById('live');
+const brightnessEl = document.getElementById('brightness');
+const contrastEl = document.getElementById('contrast');
+const signalTypeEl = document.getElementById('signal-type');
+const signalConfidenceEl = document.getElementById('signal-confidence');
+const logEl = document.getElementById('log');
+
+let lastBlobUrl = null;
+
+function addLog(message) {
+    const p = document.createElement('p');
+    p.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+    logEl.prepend(p);
+    if (logEl.children.length > 20) { // Limita o número de logs
+        logEl.removeChild(logEl.lastChild);
+    }
+}
+
+function connect() {
+    st.textContent = 'Conectando...';
+    st.style.color = 'orange';
+    ws = new WebSocket(WS_URL);
+    ws.onopen = () => {
+        st.textContent = 'Conectado';
+        st.style.color = 'lightgreen';
+        addLog('Conectado ao servidor WebSocket.');
     };
-    ws.onclose = () => { statusEl.textContent = "Desconectado ⚠️"; };
-  </script>
+    ws.onmessage = (event) => {
+        try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'frame' && msg.data) {
+                const mime = msg.mime || 'image/webp';
+                const dataUrl = `data:${mime};base64,${msg.data}`;
+
+                if (lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
+                liveImg.src = dataUrl;
+                lastBlobUrl = dataUrl; // Mantém a URL para revogar depois
+
+                pairEl.textContent = msg.pair || 'N/A';
+                lastFrameTimeEl.textContent = new Date(msg.timestamp).toLocaleTimeString();
+
+                if (msg.analysis && msg.analysis.ok) {
+                    brightnessEl.textContent = msg.analysis.brightness ? msg.analysis.brightness.toFixed(2) : '--';
+                    contrastEl.textContent = msg.analysis.contrast ? msg.analysis.contrast.toFixed(2) : '--';
+                    if (msg.analysis.signal) {
+                        signalTypeEl.textContent = msg.analysis.signal.type || '--';
+                        signalConfidenceEl.textContent = msg.analysis.signal.confidence ? (msg.analysis.signal.confidence * 100).toFixed(1) + '%' : '--';
+                    } else {
+                        signalTypeEl.textContent = '--';
+                        signalConfidenceEl.textContent = '--';
+                    }
+                } else {
+                    brightnessEl.textContent = '--';
+                    contrastEl.textContent = '--';
+                    signalTypeEl.textContent = '--';
+                    signalConfidenceEl.textContent = '--';
+                }
+                addLog(`Frame recebido. Sinal: ${msg.analysis?.signal?.type || 'N/A'}`);
+            }
+        } catch (e) {
+            addLog(`Erro ao processar mensagem: ${e.message}`);
+            console.error('Erro ao processar mensagem WS:', e);
+        }
+    };
+    ws.onclose = () => {
+        st.textContent = 'Desconectado';
+        st.style.color = 'red';
+        addLog('Conexão WebSocket fechada. Tentando reconectar em 3s...');
+        setTimeout(connect, 3000);
+    };
+    ws.onerror = (err) => {
+        addLog(`Erro WebSocket: ${err.message}`);
+        console.error('WebSocket Error:', err);
+    };
+}
+
+connect();
+</script>
 </body>
 </html>
