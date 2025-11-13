@@ -5,17 +5,38 @@
   <title>Nexus Mobile AI - Live Viewer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    :root { --bg:#0b0b0b; --panel:#111; --muted:#9aa; --accent:#00e676; }
+    :root { --bg:#0b0b0b; --panel:#111; --muted:#9aa; --accent:#00e676; --danger:#ff4d4f; }
     body { margin:0; background:var(--bg); color:#fff; font-family:Arial,Helvetica,sans-serif; -webkit-font-smoothing:antialiased; }
     header { padding:12px; background:var(--panel); border-bottom:1px solid #222; text-align:center; }
-    #container { display:flex; flex-direction:column; gap:10px; padding:12px; max-width:1100px; margin:0 auto; }
+    #container { display:flex; flex-direction:column; gap:10px; padding:12px; max-width:1200px; margin:0 auto; }
     #canvasWrap { display:flex; justify-content:center; }
     canvas { background:#000; border:1px solid #222; max-width:100%; height:auto; }
     .info { display:flex; gap:12px; justify-content:space-between; flex-wrap:wrap; color:var(--muted); font-size:13px; }
     .panel { background:#121212; padding:10px; border-radius:6px; }
     #analysis { margin-top:6px; color:var(--muted); font-size:13px; }
-    #log { margin-top:8px; max-height:140px; overflow:auto; font-size:12px; color:#cfcfcf; background:rgba(255,255,255,0.02); padding:8px; border-radius:6px; }
+    #log { margin-top:8px; max-height:180px; overflow:auto; font-size:12px; color:#cfcfcf; background:rgba(255,255,255,0.02); padding:8px; border-radius:6px; }
     #statusDot { width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:middle; background:orange; }
+    /* Signal overlay */
+    #signalOverlay {
+      position:fixed;
+      right:20px;
+      top:80px;
+      z-index:2147483647;
+      min-width:320px;
+      max-width:420px;
+      padding:14px;
+      border-radius:12px;
+      box-shadow:0 8px 30px rgba(0,0,0,0.7);
+      display:none;
+      color:#fff;
+      font-family:Arial,Helvetica,sans-serif;
+    }
+    #signalOverlay h2 { margin:0 0 6px 0; font-size:18px; }
+    #signalOverlay p { margin:4px 0; font-size:14px; color:#f0f0f0; }
+    #signalOverlay .meta { font-size:13px; color:#ddd; }
+    #signalTimer { font-weight:bold; font-size:16px; margin-top:8px; }
+    .green { background: linear-gradient(90deg,#0f7 20%, #078 100%); color:#002; }
+    .red { background: linear-gradient(90deg,#f66 20%, #d33 100%); color:#200; }
   </style>
 </head>
 <body>
@@ -23,18 +44,10 @@
 
   <div id="container">
     <div class="info panel">
-      <div>
-        <span id="conn"><span id="statusDot"></span><span id="stText">Conectando...</span></span>
-      </div>
-      <div>
-        Par: <strong id="pair">—</strong>
-      </div>
-      <div>
-        Último frame: <strong id="lastTime">—</strong>
-      </div>
-      <div>
-        Latência: <strong id="lat">—</strong>
-      </div>
+      <div><span id="statusDot"></span><span id="stText">Conectando...</span></div>
+      <div>Par: <strong id="pair">—</strong></div>
+      <div>Último frame: <strong id="lastTime">—</strong></div>
+      <div>Latência: <strong id="lat">—</strong></div>
     </div>
 
     <div id="canvasWrap" class="panel">
@@ -43,12 +56,19 @@
 
     <div id="analysis" class="panel">
       <div><strong>Análise:</strong></div>
-      <div>Brilho: <span id="brightness">--</span></div>
-      <div>Contraste: <span id="contrast">--</span></div>
-      <div>Sinal: <span id="signal">--</span> (confiança: <span id="conf">--</span>)</div>
+      <div>Confluências: <span id="confs">--</span></div>
+      <div>Probabilidade: <span id="prob">--</span></div>
+      <div id="reason">—</div>
     </div>
 
     <div id="log" class="panel"></div>
+  </div>
+
+  <div id="signalOverlay" role="alert" aria-live="assertive">
+    <h2 id="signalTitle">SINAL</h2>
+    <div id="signalDetails" class="meta"></div>
+    <p id="signalReason"></p>
+    <div id="signalTimer"></div>
   </div>
 
 <script>
@@ -60,23 +80,73 @@
   const pairEl = document.getElementById('pair');
   const lastTimeEl = document.getElementById('lastTime');
   const latEl = document.getElementById('lat');
-  const brightnessEl = document.getElementById('brightness');
-  const contrastEl = document.getElementById('contrast');
-  const signalEl = document.getElementById('signal');
-  const confEl = document.getElementById('conf');
+  const confsEl = document.getElementById('confs');
+  const probEl = document.getElementById('prob');
+  const reasonEl = document.getElementById('reason');
   const logEl = document.getElementById('log');
+
+  const signalOverlay = document.getElementById('signalOverlay');
+  const signalTitle = document.getElementById('signalTitle');
+  const signalDetails = document.getElementById('signalDetails');
+  const signalReason = document.getElementById('signalReason');
+  const signalTimer = document.getElementById('signalTimer');
 
   const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/viewer';
   let ws = null;
   let lastRecvTs = 0;
   let img = new Image();
   let pendingUrl = null;
+  let currentSignalTimeout = null;
 
   function addLog(text){
     const p = document.createElement('div');
     p.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
     logEl.prepend(p);
-    if (logEl.children.length > 60) logEl.removeChild(logEl.lastChild);
+    if (logEl.children.length > 80) logEl.removeChild(logEl.lastChild);
+  }
+
+  function showSignalOverlay(signal) {
+    if (!signal) return;
+    // populate overlay
+    const dir = signal.direction === 'call' ? 'Compra' : 'Venda';
+    const entryTime = new Date(signal.entry_time);
+    signalTitle.textContent = `${dir} — ${signal.pair}`;
+    signalDetails.textContent = `${dir} às ${entryTime.toLocaleTimeString()} • Prob: ${Math.round(signal.probability*100)}%`;
+    signalReason.textContent = `Motivo: ${signal.reason || ''}`;
+    signalOverlay.className = signal.direction === 'call' ? 'green' : 'red';
+    signalOverlay.style.display = 'block';
+    // timer until entry
+    if (currentSignalTimeout) {
+      clearInterval(currentSignalTimeout);
+      currentSignalTimeout = null;
+    }
+    currentSignalTimeout = setInterval(() => {
+      const now = new Date();
+      const diff = (new Date(signal.entry_time) - now) / 1000;
+      if (diff <= 0) {
+        signalTimer.textContent = 'Entrada AGORA';
+        clearInterval(currentSignalTimeout);
+        currentSignalTimeout = null;
+      } else {
+        const s = Math.max(0, Math.floor(diff));
+        signalTimer.textContent = `Entrada em ${s}s`;
+      }
+    }, 250);
+    // play audio (pt-BR)
+    try {
+      const utter = new SpeechSynthesisUtterance(`${signal.direction === 'call' ? 'Compra' : 'Venda'} em ${signal.pair} às ${entryTime.toLocaleTimeString()}. Probabilidade ${Math.round(signal.probability*100)} por cento. Motivo: ${signal.reason}`);
+      utter.lang = 'pt-BR';
+      speechSynthesis.speak(utter);
+    } catch(e){ console.warn('speech error', e); }
+    addLog(`SINAL: ${signal.pair} ${signal.direction} @ ${signal.entry_time} prob=${signal.probability}`);
+  }
+
+  function hideSignalOverlay() {
+    signalOverlay.style.display = 'none';
+    if (currentSignalTimeout) {
+      clearInterval(currentSignalTimeout);
+      currentSignalTimeout = null;
+    }
   }
 
   function connect(){
@@ -91,25 +161,25 @@
         const msg = JSON.parse(ev.data);
         if (msg.type === 'frame' && msg.data) {
           const now = Date.now();
-          // atualização de UI e análise
           pairEl.textContent = msg.pair || 'AUTO';
           lastTimeEl.textContent = new Date(msg.timestamp).toLocaleTimeString();
           latEl.textContent = (now - new Date(msg.timestamp).getTime()).toString() + ' ms';
-          // análise
+          // analysis info display
           if (msg.analysis) {
-            brightnessEl.textContent = (msg.analysis.brightness !== undefined ? Number(msg.analysis.brightness).toFixed(2) : '--');
-            contrastEl.textContent = (msg.analysis.contrast !== undefined ? Number(msg.analysis.contrast).toFixed(2) : '--');
             if (msg.analysis.signal) {
-              signalEl.textContent = msg.analysis.signal.type || '--';
-              confEl.textContent = (msg.analysis.signal.confidence ? (msg.analysis.signal.confidence*100).toFixed(1)+'%' : '--');
+              showSignalOverlay(msg.analysis.signal);
             } else {
-              signalEl.textContent = '--'; confEl.textContent = '--';
+              // if no signal, update brief analysis
+              confsEl.textContent = msg.analysis.confluences !== undefined ? msg.analysis.confluences : '--';
+              probEl.textContent = msg.analysis.probability ? (Math.round(msg.analysis.probability*100) + '%') : '--';
+              reasonEl.textContent = msg.analysis.reason || '--';
+              // hide overlay if not signal for extended period
+              setTimeout(() => { /* optional auto-hide after X */ }, 60000);
             }
           }
           // converte base64 para Blob, cria URL e desenha no canvas
           const mime = msg.mime || 'image/webp';
           const b64 = msg.data;
-          // decode base64 -> Uint8Array
           const binary = atob(b64);
           const len = binary.length;
           const bytes = new Uint8Array(len);
@@ -117,22 +187,19 @@
           const blob = new Blob([bytes], {type: mime});
           const url = URL.createObjectURL(blob);
 
-          // desenha quando imagem carregar
           img.onload = function(){
-            // ajusta canvas ao aspecto da imagem mantendo largura máxima
             const maxW = Math.min(window.innerWidth - 40, 1100);
             const scale = Math.min(maxW / img.width, 1);
             canvas.width = Math.round(img.width * scale);
             canvas.height = Math.round(img.height * scale);
             ctx.clearRect(0,0,canvas.width,canvas.height);
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            // desenhar overlay simples (timestamp)
-            ctx.fillStyle = 'rgba(0,0,0,0.5)';
-            ctx.fillRect(6, 6, 160, 22);
+            // overlay timestamp
+            ctx.fillStyle = 'rgba(0,0,0,0.45)';
+            ctx.fillRect(6, 6, 180, 24);
             ctx.fillStyle = '#fff';
-            ctx.font = '12px Arial';
-            ctx.fillText(new Date(msg.timestamp).toLocaleTimeString(), 12, 22);
-            // revogar url antigo
+            ctx.font = '13px Arial';
+            ctx.fillText(new Date(msg.timestamp).toLocaleTimeString(), 12, 24);
             if (pendingUrl) URL.revokeObjectURL(pendingUrl);
             pendingUrl = url;
           };
@@ -142,7 +209,7 @@
           };
           img.src = url;
 
-          addLog('Frame recebido (visual). size=' + b64.length);
+          addLog('Frame recebido • size=' + b64.length);
         }
       } catch (e) {
         addLog('Erro ao processar mensagem: ' + e.message);
@@ -163,10 +230,8 @@
 
   connect();
 
-  // redimensiona canvas quando redimensionar a janela
-  window.addEventListener('resize', () => {
-    // redesenho automático ocorrerá no próximo frame recebido
-  });
+  // click overlay to hide
+  signalOverlay.addEventListener('click', () => hideSignalOverlay());
 
 })();
 </script>
