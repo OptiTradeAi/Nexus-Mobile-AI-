@@ -2,123 +2,173 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Nexus Mobile AI - Viewer</title>
+  <title>Nexus Mobile AI - Live Viewer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { margin:0; background:#0b0b0b; color:#fff; font-family:Arial,Helvetica,sans-serif; }
-    header { padding:10px; background:#111; border-bottom:1px solid #222; text-align: center; }
-    #wrap { display:flex; flex-direction:column; gap:8px; padding:10px; max-width: 900px; margin: 0 auto; }
-    #live { width:100%; height:auto; border:1px solid #333; background:#000; display: block; }
-    .info { font-size:14px; color:#bbb; display: flex; justify-content: space-between; flex-wrap: wrap; }
-    .info span { margin-right: 10px; }
-    #analysis-results { margin-top: 10px; padding: 10px; background: #1a1a1a; border-radius: 5px; }
-    #analysis-results h4 { margin-top: 0; color: #00e676; }
-    #analysis-results p { margin: 5px 0; }
-    #log { background: rgba(0,0,0,0.5); padding: 5px; max-height: 100px; overflow-y: auto; font-size: 12px; border-radius: 4px; margin-top: 10px; }
+    :root { --bg:#0b0b0b; --panel:#111; --muted:#9aa; --accent:#00e676; }
+    body { margin:0; background:var(--bg); color:#fff; font-family:Arial,Helvetica,sans-serif; -webkit-font-smoothing:antialiased; }
+    header { padding:12px; background:var(--panel); border-bottom:1px solid #222; text-align:center; }
+    #container { display:flex; flex-direction:column; gap:10px; padding:12px; max-width:1100px; margin:0 auto; }
+    #canvasWrap { display:flex; justify-content:center; }
+    canvas { background:#000; border:1px solid #222; max-width:100%; height:auto; }
+    .info { display:flex; gap:12px; justify-content:space-between; flex-wrap:wrap; color:var(--muted); font-size:13px; }
+    .panel { background:#121212; padding:10px; border-radius:6px; }
+    #analysis { margin-top:6px; color:var(--muted); font-size:13px; }
+    #log { margin-top:8px; max-height:140px; overflow:auto; font-size:12px; color:#cfcfcf; background:rgba(255,255,255,0.02); padding:8px; border-radius:6px; }
+    #statusDot { width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:middle; background:orange; }
   </style>
 </head>
 <body>
-  <header><strong>Nexus Mobile AI - Viewer</strong></header>
-  <div id="wrap">
-    <div class="info">
-      <span>Conexão: <span id="st">—</span></span>
-      <span>Par: <span id="pair">—</span></span>
-      <span>Último Frame: <span id="last-frame-time">—</span></span>
+  <header><strong>Nexus Mobile AI — Live Viewer (visual)</strong></header>
+
+  <div id="container">
+    <div class="info panel">
+      <div>
+        <span id="conn"><span id="statusDot"></span><span id="stText">Conectando...</span></span>
+      </div>
+      <div>
+        Par: <strong id="pair">—</strong>
+      </div>
+      <div>
+        Último frame: <strong id="lastTime">—</strong>
+      </div>
+      <div>
+        Latência: <strong id="lat">—</strong>
+      </div>
     </div>
-    <img id="live" src="" alt="Aguardando frames" />
-    <div id="analysis-results">
-      <h4>Análise do Frame:</h4>
-      <p>Brilho: <span id="brightness">--</span></p>
-      <p>Contraste: <span id="contrast">--</span></p>
-      <p>Sinal: <span id="signal-type">--</span> (Confiança: <span id="signal-confidence">--</span>)</p>
+
+    <div id="canvasWrap" class="panel">
+      <canvas id="liveCanvas" width="980" height="520"></canvas>
     </div>
-    <div id="log"></div>
+
+    <div id="analysis" class="panel">
+      <div><strong>Análise:</strong></div>
+      <div>Brilho: <span id="brightness">--</span></div>
+      <div>Contraste: <span id="contrast">--</span></div>
+      <div>Sinal: <span id="signal">--</span> (confiança: <span id="conf">--</span>)</div>
+    </div>
+
+    <div id="log" class="panel"></div>
   </div>
 
 <script>
-const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/viewer';
-let ws = null;
+(function(){
+  const canvas = document.getElementById('liveCanvas');
+  const ctx = canvas.getContext('2d');
+  const stText = document.getElementById('stText');
+  const statusDot = document.getElementById('statusDot');
+  const pairEl = document.getElementById('pair');
+  const lastTimeEl = document.getElementById('lastTime');
+  const latEl = document.getElementById('lat');
+  const brightnessEl = document.getElementById('brightness');
+  const contrastEl = document.getElementById('contrast');
+  const signalEl = document.getElementById('signal');
+  const confEl = document.getElementById('conf');
+  const logEl = document.getElementById('log');
 
-const st = document.getElementById('st');
-const pairEl = document.getElementById('pair');
-const lastFrameTimeEl = document.getElementById('last-frame-time');
-const liveImg = document.getElementById('live');
-const brightnessEl = document.getElementById('brightness');
-const contrastEl = document.getElementById('contrast');
-const signalTypeEl = document.getElementById('signal-type');
-const signalConfidenceEl = document.getElementById('signal-confidence');
-const logEl = document.getElementById('log');
+  const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/viewer';
+  let ws = null;
+  let lastRecvTs = 0;
+  let img = new Image();
+  let pendingUrl = null;
 
-let lastBlobUrl = null;
-
-function addLog(message) {
-    const p = document.createElement('p');
-    p.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+  function addLog(text){
+    const p = document.createElement('div');
+    p.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
     logEl.prepend(p);
-    if (logEl.children.length > 20) { // Limita o número de logs
-        logEl.removeChild(logEl.lastChild);
-    }
-}
+    if (logEl.children.length > 60) logEl.removeChild(logEl.lastChild);
+  }
 
-function connect() {
-    st.textContent = 'Conectando...';
-    st.style.color = 'orange';
+  function connect(){
     ws = new WebSocket(WS_URL);
     ws.onopen = () => {
-        st.textContent = 'Conectado';
-        st.style.color = 'lightgreen';
-        addLog('Conectado ao servidor WebSocket.');
+      stText.textContent = 'Conectado';
+      statusDot.style.background = 'limegreen';
+      addLog('WS conectado');
     };
-    ws.onmessage = (event) => {
-        try {
-            const msg = JSON.parse(event.data);
-            if (msg.type === 'frame' && msg.data) {
-                const mime = msg.mime || 'image/webp';
-                const dataUrl = `data:${mime};base64,${msg.data}`;
-
-                if (lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
-                liveImg.src = dataUrl;
-                lastBlobUrl = dataUrl; // Mantém a URL para revogar depois
-
-                pairEl.textContent = msg.pair || 'N/A';
-                lastFrameTimeEl.textContent = new Date(msg.timestamp).toLocaleTimeString();
-
-                if (msg.analysis && msg.analysis.ok) {
-                    brightnessEl.textContent = msg.analysis.brightness ? msg.analysis.brightness.toFixed(2) : '--';
-                    contrastEl.textContent = msg.analysis.contrast ? msg.analysis.contrast.toFixed(2) : '--';
-                    if (msg.analysis.signal) {
-                        signalTypeEl.textContent = msg.analysis.signal.type || '--';
-                        signalConfidenceEl.textContent = msg.analysis.signal.confidence ? (msg.analysis.signal.confidence * 100).toFixed(1) + '%' : '--';
-                    } else {
-                        signalTypeEl.textContent = '--';
-                        signalConfidenceEl.textContent = '--';
-                    }
-                } else {
-                    brightnessEl.textContent = '--';
-                    contrastEl.textContent = '--';
-                    signalTypeEl.textContent = '--';
-                    signalConfidenceEl.textContent = '--';
-                }
-                addLog(`Frame recebido. Sinal: ${msg.analysis?.signal?.type || 'N/A'}`);
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'frame' && msg.data) {
+          const now = Date.now();
+          // atualização de UI e análise
+          pairEl.textContent = msg.pair || 'AUTO';
+          lastTimeEl.textContent = new Date(msg.timestamp).toLocaleTimeString();
+          latEl.textContent = (now - new Date(msg.timestamp).getTime()).toString() + ' ms';
+          // análise
+          if (msg.analysis) {
+            brightnessEl.textContent = (msg.analysis.brightness !== undefined ? Number(msg.analysis.brightness).toFixed(2) : '--');
+            contrastEl.textContent = (msg.analysis.contrast !== undefined ? Number(msg.analysis.contrast).toFixed(2) : '--');
+            if (msg.analysis.signal) {
+              signalEl.textContent = msg.analysis.signal.type || '--';
+              confEl.textContent = (msg.analysis.signal.confidence ? (msg.analysis.signal.confidence*100).toFixed(1)+'%' : '--');
+            } else {
+              signalEl.textContent = '--'; confEl.textContent = '--';
             }
-        } catch (e) {
-            addLog(`Erro ao processar mensagem: ${e.message}`);
-            console.error('Erro ao processar mensagem WS:', e);
+          }
+          // converte base64 para Blob, cria URL e desenha no canvas
+          const mime = msg.mime || 'image/webp';
+          const b64 = msg.data;
+          // decode base64 -> Uint8Array
+          const binary = atob(b64);
+          const len = binary.length;
+          const bytes = new Uint8Array(len);
+          for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+          const blob = new Blob([bytes], {type: mime});
+          const url = URL.createObjectURL(blob);
+
+          // desenha quando imagem carregar
+          img.onload = function(){
+            // ajusta canvas ao aspecto da imagem mantendo largura máxima
+            const maxW = Math.min(window.innerWidth - 40, 1100);
+            const scale = Math.min(maxW / img.width, 1);
+            canvas.width = Math.round(img.width * scale);
+            canvas.height = Math.round(img.height * scale);
+            ctx.clearRect(0,0,canvas.width,canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            // desenhar overlay simples (timestamp)
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(6, 6, 160, 22);
+            ctx.fillStyle = '#fff';
+            ctx.font = '12px Arial';
+            ctx.fillText(new Date(msg.timestamp).toLocaleTimeString(), 12, 22);
+            // revogar url antigo
+            if (pendingUrl) URL.revokeObjectURL(pendingUrl);
+            pendingUrl = url;
+          };
+          img.onerror = function(e){
+            addLog('Erro carregando imagem: ' + e);
+            URL.revokeObjectURL(url);
+          };
+          img.src = url;
+
+          addLog('Frame recebido (visual). size=' + b64.length);
         }
+      } catch (e) {
+        addLog('Erro ao processar mensagem: ' + e.message);
+        console.error(e);
+      }
     };
     ws.onclose = () => {
-        st.textContent = 'Desconectado';
-        st.style.color = 'red';
-        addLog('Conexão WebSocket fechada. Tentando reconectar em 3s...');
-        setTimeout(connect, 3000);
+      stText.textContent = 'Desconectado';
+      statusDot.style.background = 'orange';
+      addLog('WS desconectado — reconectando em 2s');
+      setTimeout(connect, 2000);
     };
     ws.onerror = (err) => {
-        addLog(`Erro WebSocket: ${err.message}`);
-        console.error('WebSocket Error:', err);
+      addLog('Erro WS: ' + (err.message || JSON.stringify(err)));
+      console.error('WS error', err);
     };
-}
+  }
 
-connect();
+  connect();
+
+  // redimensiona canvas quando redimensionar a janela
+  window.addEventListener('resize', () => {
+    // redesenho automático ocorrerá no próximo frame recebido
+  });
+
+})();
 </script>
 </body>
 </html>
