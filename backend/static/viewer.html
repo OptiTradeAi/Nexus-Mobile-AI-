@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Nexus Mobile AI - Viewer</title>
+  <style>
+    body { background: #0b0e17; margin: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; flex-direction: column; color: white; font-family: sans-serif; }
+    #canvas { border: 2px solid #0ff; border-radius: 10px; max-width: 95vw; max-height: 80vh; }
+    #status { margin-top: 10px; color: #0ff; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h3>Nexus Mobile AI - Stream Viewer</h3>
+  <canvas id="canvas"></canvas>
+  <div id="status">Conectando...</div>
+
+  <script>
+    const ws = new WebSocket(`wss://${window.location.host}/ws/stream`);
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const statusEl = document.getElementById("status");
+
+    ws.onopen = () => { statusEl.textContent = "Conectado ao stream 🔵"; };
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "frame" && msg.data) {
+        const img = new Image();
+        img.onload = () => {
+          canvas.width = img.width;
+          canvas.height = img.height;
+          ctx.drawImage(img, 0, 0);
+        };
+        img.src = "data:image/jpeg;base64," + msg.data;
+        if (msg.analysis) {
+          statusEl.textContent = `Par: ${msg.analysis.pair} | Candles visuais: ${msg.analysis.visual.candles_detected}`;
+        }
+      }
+    };
+    ws.onclose = () => { statusEl.textContent = "Desconectado ⚠️"; };
+  </script>
+</body>
+</html>
