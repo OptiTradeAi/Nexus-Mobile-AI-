@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+websockets
+numpy
+pandas
+pytz
+python-dotenv
+pillow
