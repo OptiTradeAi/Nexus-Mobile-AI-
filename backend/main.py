@@ -1,14 +1,42 @@
 # backend/main.py
-from fastapi import FastAPI, WebSocket, Query, WebSocketDisconnect, Body
+"""
+Nexus Mobile AI Stream Server
+Recebe frames + meta via WebSocket, analisa com ai_engine_fusion e transmite para viewers.
+"""
+
+# --- DEBUG IMPORT HELPER (opcional, mas ajuda a diagnosticar erros de import) ---
+import os, sys, logging
+from pathlib import Path
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("startup")
+
+log.info("=== Nexus Mobile AI Startup Debug Info ===")
+log.info(f"CWD: {os.getcwd()}")
+log.info(f"PYTHONPATH (first 10): {sys.path[:10]}")
+
+# tenta garantir que backend está no sys.path
+backend_path = Path(__file__).parent.resolve()
+if str(backend_path) not in sys.path:
+    sys.path.insert(0, str(backend_path))
+    log.info(f"Added to sys.path: {backend_path}")
+
+# tenta importar ai_engine_fusion com fallbacks
+try:
+    from backend.ai_engine_fusion import analyze_frame_with_meta
+    log.info("✅ Import backend.ai_engine_fusion OK")
+except ImportError as e:
+    log.error("❌ Import backend.ai_engine_fusion FAILED")
+    log.error("Traceback:", exc_info=True)
+    raise e
+
+# --- Imports principais ---
+from fastapi import FastAPI, WebSocket, Query, Body
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio, json, base64, os
 from datetime import datetime
 import pytz
-
-# importa o motor de análise (assume que ai_engine_fusion.py está no mesmo diretório)
-from ai_engine_fusion import analyze_frame_with_meta
 
 app = FastAPI(title="Nexus Mobile AI Stream Server")
 TZ = pytz.timezone("America/Sao_Paulo")
@@ -40,22 +68,13 @@ async def root():
 async def health():
     return {"status": "ok", "time": datetime.now(TZ).isoformat()}
 
-# Opcional: variável de ambiente para token
-AUTH_TOKEN = os.environ.get("NEXUS_WS_TOKEN", "")
-
+# --- WebSockets ---
 stream_clients = set()
 viewer_clients = set()
-
 DEBUG_SAVE_PATH = os.path.join(STATIC_DIR, "latest_frame.webp")
 
 @app.websocket("/ws/stream")
 async def websocket_stream_endpoint(websocket: WebSocket, token: str = Query(None)):
-    # Autenticação simples (opcional)
-    if AUTH_TOKEN and token != AUTH_TOKEN:
-        await websocket.close(code=1008)
-        print("Conexão stream recusada: token inválido")
-        return
-
     await websocket.accept()
     stream_clients.add(websocket)
     client_addr = getattr(websocket.client, "host", "unknown")
@@ -63,14 +82,13 @@ async def websocket_stream_endpoint(websocket: WebSocket, token: str = Query(Non
 
     try:
         while True:
-            msg = await websocket.receive()  # pode conter 'text' ou 'bytes'
+            msg = await websocket.receive()
             frame_b64 = None
             mime = "image/webp"
             pair = "AUTO"
             payload = None
 
             if "text" in msg and msg["text"]:
-                # espera JSON com {type:'frame', data: '<base64>', current_price, next_candle_seconds, ...}
                 try:
                     payload = json.loads(msg["text"])
                     if payload.get("type") == "frame" and payload.get("data"):
@@ -97,7 +115,7 @@ async def websocket_stream_endpoint(websocket: WebSocket, token: str = Query(Non
                 await asyncio.sleep(0.001)
                 continue
 
-            # Salva um frame de debug (somente sobrescreve)
+            # Salva frame para debug
             try:
                 with open(DEBUG_SAVE_PATH, "wb") as f:
                     f.write(base64.b64decode(frame_b64))
@@ -105,7 +123,7 @@ async def websocket_stream_endpoint(websocket: WebSocket, token: str = Query(Non
             except Exception as e:
                 print("⚠️ Falha ao salvar debug frame:", e)
 
-            # Chama o motor de análise (passa payload completo se disponível)
+            # Análise com engine fusion
             try:
                 if payload is None:
                     payload = {"type": "frame", "data": frame_b64, "mime": mime, "pair": pair, "timestamp": datetime.now(TZ).isoformat()}
@@ -137,8 +155,6 @@ async def websocket_stream_endpoint(websocket: WebSocket, token: str = Query(Non
 
             await asyncio.sleep(0.001)
 
-    except WebSocketDisconnect:
-        print(f"🔴 Streamer desconectado: {client_addr}")
     except Exception as e:
         print("❌ Erro no websocket stream:", e)
     finally:
@@ -156,7 +172,6 @@ async def websocket_viewer_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            # Mantém a conexão aberta; permite viewer enviar comandos que serão repassados aos streamers
             try:
                 msg = await websocket.receive_text()
                 try:
@@ -170,13 +185,9 @@ async def websocket_viewer_endpoint(websocket: WebSocket):
                                 try: stream_clients.remove(s)
                                 except: pass
                 except Exception:
-                    # ignora mensagens não-JSON
                     pass
             except Exception:
-                # sem mensagem de texto, apenas continue
                 await asyncio.sleep(0.1)
-    except WebSocketDisconnect:
-        print(f"🔴 Viewer desconectado: {client_addr}")
     except Exception as e:
         print("❌ Erro no websocket viewer:", e)
     finally:
@@ -192,13 +203,9 @@ async def get_viewer_page():
         return FileResponse(p, media_type="text/html")
     return JSONResponse({"error": "viewer.html não encontrado"}, status_code=404)
 
-# HTTP endpoints para controlar streamers (útil para UI/admin)
+# --- Controle via HTTP ---
 @app.post("/control/pairs")
 async def control_pairs(body: dict = Body(...)):
-    """
-    Body esperado: {"pairs": ["PETR4","VALE3",...], "interval": 2000}
-    Envia comando para todos streamers: {type:'command', cmd:'set_pairs', pairs: [...], interval: N}
-    """
     pairs = body.get("pairs", [])
     interval = int(body.get("interval", 2000))
     cmd = {"type": "command", "cmd": "set_pairs", "pairs": pairs, "interval": interval}
@@ -214,10 +221,6 @@ async def control_pairs(body: dict = Body(...)):
 
 @app.post("/control/command")
 async def control_command(body: dict = Body(...)):
-    """
-    Body exemplo: {"cmd":"start_cycle"} ou {"cmd":"change_pair","pair":"PETR4"}
-    Repassa o comando para os streamers.
-    """
     cmd_body = body.copy()
     cmd = {"type": "command", "cmd": cmd_body.get("cmd"), **({k:v for k,v in cmd_body.items() if k!="cmd"})}
     sent = 0
