@@ -4,9 +4,21 @@ Nexus Mobile AI Stream Server
 Recebe frames + meta via WebSocket, analisa com ai_engine_fusion e transmite para viewers.
 """
 
-# --- DEBUG IMPORT HELPER (opcional, mas ajuda a diagnosticar erros de import) ---
-import os, sys, logging
+import os
+import sys
+import logging
 from pathlib import Path
+from datetime import datetime
+import pytz
+import json
+import base64
+import asyncio
+
+from fastapi import FastAPI, WebSocket, Query, Body
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("startup")
 
@@ -14,34 +26,25 @@ log.info("=== Nexus Mobile AI Startup Debug Info ===")
 log.info(f"CWD: {os.getcwd()}")
 log.info(f"PYTHONPATH (first 10): {sys.path[:10]}")
 
-# tenta garantir que backend está no sys.path
 backend_path = Path(__file__).parent.resolve()
 if str(backend_path) not in sys.path:
     sys.path.insert(0, str(backend_path))
     log.info(f"Added to sys.path: {backend_path}")
 
-# tenta importar ai_engine_fusion com fallbacks
 try:
     from backend.ai_engine_fusion import analyze_frame_with_meta
     log.info("✅ Import backend.ai_engine_fusion OK")
-except ImportError as e:
-    log.error("❌ Import backend.ai_engine_fusion FAILED")
-    log.error("Traceback:", exc_info=True)
-    raise e
-
-# --- Imports principais ---
-from fastapi import FastAPI, WebSocket, Query, Body
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-import asyncio, json, base64, os
-from datetime import datetime
-import pytz
+except ImportError:
+    try:
+        from ai_engine_fusion import analyze_frame_with_meta
+        log.info("✅ Import ai_engine_fusion OK (fallback)")
+    except Exception as e:
+        log.error("❌ Import ai_engine_fusion FAILED", exc_info=True)
+        analyze_frame_with_meta = lambda payload: {"ok": False, "error": "ai_engine_fusion não disponível"}
 
 app = FastAPI(title="Nexus Mobile AI Stream Server")
 TZ = pytz.timezone("America/Sao_Paulo")
 
-# CORS - em produção restrinja allow_origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -50,8 +53,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve arquivos estáticos (viewer.html etc.)
-STATIC_DIR = "backend/static"
+STATIC_DIR = os.path.join(str(backend_path), "static")
 os.makedirs(STATIC_DIR, exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -68,7 +70,6 @@ async def root():
 async def health():
     return {"status": "ok", "time": datetime.now(TZ).isoformat()}
 
-# --- WebSockets ---
 stream_clients = set()
 viewer_clients = set()
 DEBUG_SAVE_PATH = os.path.join(STATIC_DIR, "latest_frame.webp")
@@ -96,6 +97,24 @@ async def websocket_stream_endpoint(websocket: WebSocket, token: str = Query(Non
                         mime = payload.get("mime", mime)
                         pair = payload.get("pair", pair)
                         print(f"📥 Frame recebido (texto) pair={pair} size={len(frame_b64)}")
+                    elif payload.get("type") == "tick":
+                        try:
+                            analysis_result = analyze_frame_with_meta(payload)
+                            packet = {
+                                "type": "analysis",
+                                "pair": payload.get("pair"),
+                                "timestamp": payload.get("timestamp"),
+                                "analysis": analysis_result
+                            }
+                            for v in list(viewer_clients):
+                                try:
+                                    await v.send_json(packet)
+                                except Exception:
+                                    try: viewer_clients.remove(v)
+                                    except: pass
+                        except Exception as e:
+                            print("⚠️ Erro ao analisar tick:", e)
+                        continue
                 except Exception as e:
                     print("⚠️ JSON inválido recebido no stream:", e)
                     continue
@@ -115,7 +134,6 @@ async def websocket_stream_endpoint(websocket: WebSocket, token: str = Query(Non
                 await asyncio.sleep(0.001)
                 continue
 
-            # Salva frame para debug
             try:
                 with open(DEBUG_SAVE_PATH, "wb") as f:
                     f.write(base64.b64decode(frame_b64))
@@ -123,7 +141,6 @@ async def websocket_stream_endpoint(websocket: WebSocket, token: str = Query(Non
             except Exception as e:
                 print("⚠️ Falha ao salvar debug frame:", e)
 
-            # Análise com engine fusion
             try:
                 if payload is None:
                     payload = {"type": "frame", "data": frame_b64, "mime": mime, "pair": pair, "timestamp": datetime.now(TZ).isoformat()}
@@ -132,17 +149,15 @@ async def websocket_stream_endpoint(websocket: WebSocket, token: str = Query(Non
                 analysis_result = {"ok": False, "error": str(e)}
                 print("⚠️ analyze_frame_with_meta gerou erro:", e)
 
-            # Monta pacote para viewers
             packet = {
                 "type": "frame",
                 "data": frame_b64,
                 "mime": mime,
                 "pair": pair,
                 "timestamp": payload.get("timestamp", datetime.now(TZ).isoformat()),
-                "analysis": analysis_result.get("analysis") if isinstance(analysis_result, dict) else analysis_result
+                "analysis": analysis_result if isinstance(analysis_result, dict) else {"result": analysis_result}
             }
 
-            # Broadcast para viewers
             for v in list(viewer_clients):
                 try:
                     await v.send_json(packet)
@@ -203,7 +218,6 @@ async def get_viewer_page():
         return FileResponse(p, media_type="text/html")
     return JSONResponse({"error": "viewer.html não encontrado"}, status_code=404)
 
-# --- Controle via HTTP ---
 @app.post("/control/pairs")
 async def control_pairs(body: dict = Body(...)):
     pairs = body.get("pairs", [])
@@ -232,3 +246,27 @@ async def control_command(body: dict = Body(...)):
             try: stream_clients.remove(s)
             except: pass
     return {"sent": sent, "cmd": cmd}
+
+# ---------------------------
+# NOVO: endpoint para receber histórico de trades
+# ---------------------------
+@app.post("/history")
+async def post_history(record: dict = Body(...)):
+    """
+    Recebe um registro de resultado de operação do agent e salva em backend/static/trade_history.json
+    """
+    try:
+        path = os.path.join(STATIC_DIR, "trade_history.json")
+        existing = []
+        if os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    existing = json.load(f)
+            except Exception:
+                existing = []
+        existing.append(record)
+        with open(path, "w") as f:
+            json.dump(existing, f, indent=2, ensure_ascii=False)
+        return {"ok": True, "saved_at": datetime.now(TZ).isoformat()}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
