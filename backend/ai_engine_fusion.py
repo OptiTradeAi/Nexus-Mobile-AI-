@@ -9,11 +9,10 @@ Kaon Precision 80 - Engine de análise (corrigido)
 
 import os
 import json
-import time
 import math
 import threading
 from datetime import datetime, timezone, timedelta
-from collections import defaultdict, deque
+from collections import deque
 
 import numpy as np
 import pandas as pd
@@ -36,6 +35,7 @@ STATE = {
     "global": {"last_signal": None}
 }
 
+
 def _load_history():
     if os.path.isfile(HISTORY_PATH):
         try:
@@ -45,6 +45,7 @@ def _load_history():
             return {"trades": []}
     return {"trades": []}
 
+
 def _save_history(h):
     try:
         with open(HISTORY_PATH, "w") as f:
@@ -52,7 +53,9 @@ def _save_history(h):
     except Exception as e:
         print("⚠️ Falha ao salvar history:", e)
 
+
 HISTORY = _load_history()
+
 
 def _persist_state():
     try:
@@ -62,22 +65,21 @@ def _persist_state():
     except Exception as e:
         print("⚠️ Falha ao persistir state:", e)
 
+
 def now_ts():
     return datetime.now(timezone.utc)
 
-def to_local(dt):
-    if isinstance(dt, str):
-        dt = datetime.fromisoformat(dt)
-    return dt.astimezone(TIMEZONE)
 
 def start_of_m5(dt):
     minute = (dt.minute // 5) * 5
     return dt.replace(minute=minute, second=0, microsecond=0)
 
+
 def next_m5_open(dt):
     s = start_of_m5(dt)
     candidate = s + timedelta(minutes=5)
     return candidate
+
 
 def _ensure_pair(pair):
     with _state_lock:
@@ -91,11 +93,13 @@ def _ensure_pair(pair):
                 "stats": {"wins": 0, "losses": 0, "trades": 0}
             }
 
+
 def add_tick(pair, ts, price):
     """ts: datetime (aware)"""
     _ensure_pair(pair)
     with _state_lock:
         STATE["pairs"][pair]["ticks"].append((ts.isoformat(), float(price)))
+
 
 def build_m5_from_ticks(pair):
     _ensure_pair(pair)
@@ -109,7 +113,7 @@ def build_m5_from_ticks(pair):
     try:
         m5 = df['price'].resample('5T').ohlc()
         m5['v'] = df['price'].resample('5T').count()
-        m5 = m5.dropna().reset_index().rename(columns={'open':'o','high':'h','low':'l','close':'c','volume':'v','ts':'time'})
+        m5 = m5.dropna().reset_index().rename(columns={'open': 'o', 'high': 'h', 'low': 'l', 'close': 'c', 'volume': 'v', 'ts': 'time'})
         with _state_lock:
             STATE["pairs"][pair]["m5"] = m5
         return m5
@@ -117,9 +121,11 @@ def build_m5_from_ticks(pair):
         print("⚠️ build_m5_from_ticks error", e)
         return None
 
+
 # indicadores
 def compute_ema(series, span):
     return series.ewm(span=span, adjust=False).mean()
+
 
 def compute_rsi(series, period=14):
     delta = series.diff()
@@ -130,6 +136,7 @@ def compute_rsi(series, period=14):
     rsi = 100 - (100 / (1 + (ma_up / ma_down)))
     return rsi
 
+
 def bollinger_bands(series, length=20, mult=2.0):
     ma = series.rolling(length).mean()
     std = series.rolling(length).std()
@@ -137,13 +144,14 @@ def bollinger_bands(series, length=20, mult=2.0):
     lower = ma - mult * std
     return ma, upper, lower
 
+
 def detect_sr_zones(m5_df, lookback=60):
     if m5_df is None or len(m5_df) < 5:
         return []
     prices = m5_df['c']
     pivots = []
-    for i in range(2, len(prices)-2):
-        window = prices[i-2:i+3]
+    for i in range(2, len(prices) - 2):
+        window = prices[i - 2:i + 3]
         center = prices.iloc[i]
         if center == window.max():
             pivots.append(('res', center, i))
@@ -151,7 +159,7 @@ def detect_sr_zones(m5_df, lookback=60):
             pivots.append(('sup', center, i))
     zones = []
     for t, p, idx in pivots[-lookback:]:
-        zones.append({'type': 'res' if t=='res' else 'sup', 'price': float(p), 'weight': 1})
+        zones.append({'type': 'res' if t == 'res' else 'sup', 'price': float(p), 'weight': 1})
     # merge clusters by proximity
     merged = []
     while zones:
@@ -165,12 +173,11 @@ def detect_sr_zones(m5_df, lookback=60):
         merged.append({'type': cluster[0]['type'], 'price': avg_price, 'weight': len(cluster)})
     return merged
 
+
 def evaluate_confluences(pair, m5_df):
     if m5_df is None or len(m5_df) < MIN_CANDLES_FOR_INDICATORS:
-        return {'confluences': 0, 'details': {}, 'probability': 0.0, 'direction': None, 'reason':'insufficient_data'}
+        return {'confluences': 0, 'details': {}, 'probability': 0.0, 'direction': None, 'reason': 'insufficient_data'}
     series = m5_df['c'].copy().reset_index(drop=True).astype(float)
-    last_idx = len(series)-1
-    last = series.iloc[-1]
     ema20 = compute_ema(series, 20).iloc[-1]
     ema50 = compute_ema(series, 50).iloc[-1]
     trend = 'bull' if ema20 > ema50 else 'bear'
@@ -178,9 +185,9 @@ def evaluate_confluences(pair, m5_df):
     ma, upper, lower = bollinger_bands(series, 20, 2)
     close_outside_upper = False
     close_outside_lower = False
-    if not math.isnan(upper.iloc[-1]):
+    if not pd.isna(upper.iloc[-1]):
         close_outside_upper = series.iloc[-1] > upper.iloc[-1]
-    if not math.isnan(lower.iloc[-1]):
+    if not pd.isna(lower.iloc[-1]):
         close_outside_lower = series.iloc[-1] < lower.iloc[-1]
 
     def candle_props(i):
@@ -191,7 +198,7 @@ def evaluate_confluences(pair, m5_df):
         body = abs(c - o)
         upper_wick = h - max(c, o)
         lower_wick = min(c, o) - l
-        return {'o':o,'h':h,'l':l,'c':c,'body':body,'uw':upper_wick,'lw':lower_wick}
+        return {'o': o, 'h': h, 'l': l, 'c': c, 'body': body, 'uw': upper_wick, 'lw': lower_wick}
 
     p_last = candle_props(-1)
     p_prev = candle_props(-2)
@@ -201,6 +208,7 @@ def evaluate_confluences(pair, m5_df):
 
     zones = detect_sr_zones(m5_df, lookback=60)
     near_zone = None
+    last = series.iloc[-1]
     for z in zones:
         if abs(last - z['price']) <= (0.006 * z['price']):
             near_zone = z
@@ -230,9 +238,9 @@ def evaluate_confluences(pair, m5_df):
 
     rsi_conf = False
     boll_conf = False
-    if rsi < 30 and p_last['lw'] > p_last['body']*0.8:
+    if rsi < 30 and p_last['lw'] > p_last['body'] * 0.8:
         rsi_conf = True
-    if rsi > 70 and p_last['uw'] > p_last['body']*0.8:
+    if rsi > 70 and p_last['uw'] > p_last['body'] * 0.8:
         rsi_conf = True
     if close_outside_lower:
         boll_conf = True
@@ -284,11 +292,13 @@ def evaluate_confluences(pair, m5_df):
         'reason': ' + '.join(confluences) if confluences else 'none'
     }
 
+
 def analyze_frame(frame_b64, mime="image/webp"):
     try:
         return {'ok': True, 'info': 'no meta provided'}
     except Exception as e:
         return {'ok': False, 'error': str(e)}
+
 
 def register_entry(payload):
     """
@@ -298,12 +308,12 @@ def register_entry(payload):
     try:
         pair = payload.get('pair', 'UNKNOWN_PAIR')
         entry_price = float(payload.get('entry_price')) if payload.get('entry_price') is not None else None
-        entry_time_iso = payload.get('entry_time')
+        entry_time_iso = payload.get('entry_time') or now_ts().isoformat()
         direction = payload.get('direction')
         _ensure_pair(pair)
         with _state_lock:
             STATE["pairs"][pair]['active_op'] = {
-                'entry_time': entry_time_iso or now_ts().isoformat(),
+                'entry_time': entry_time_iso,
                 'direction': direction,
                 'entry_price': entry_price
             }
@@ -312,6 +322,7 @@ def register_entry(payload):
         return {'ok': True, 'registered': True, 'pair': pair}
     except Exception as e:
         return {'ok': False, 'error': str(e)}
+
 
 def analyze_frame_with_meta(payload):
     """
@@ -389,7 +400,7 @@ def analyze_frame_with_meta(payload):
                     elif result == 'LOSS':
                         STATE["pairs"][pair]['stats']['losses'] += 1
                         STATE["pairs"][pair]['stats']['trades'] += 1
-                    STATE["pairs"][pair]['blocked_until'] = (now + timedelta(minutes=5*M5_BLOCK_CANDLES)).isoformat()
+                    STATE["pairs"][pair]['blocked_until'] = (now + timedelta(minutes=5 * M5_BLOCK_CANDLES)).isoformat()
                 _save_history(HISTORY)
                 _persist_state()
                 return {'ok': True, 'analysis': {'trade_closed': trade}}
