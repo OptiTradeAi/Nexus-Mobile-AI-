@@ -1,7 +1,8 @@
 import asyncio
 import json
+import pytz
 import websockets
-from datetime import datetime
+from datetime import datetime, timedelta
 from playwright.async_api import async_playwright
 
 from backend.navigator.login import NavigatorLogin
@@ -10,6 +11,7 @@ from backend.navigator.capture import NavigatorCapture
 
 BACKEND_WS_URL = "wss://nexus-mobile-ai.onrender.com/ws/stream"
 AGENT_ID = "agent-navigator-01"
+BR_TZ = pytz.timezone("America/Sao_Paulo")
 
 class NexusNavigator:
     def __init__(self):
@@ -32,6 +34,20 @@ class NexusNavigator:
         }
         await self.ws.send(json.dumps(payload))
 
+    async def send_signal(self, pair, direction, entry_time, probability, reason):
+        payload = {
+            "type": "signal",
+            "signal": {
+                "pair": pair,
+                "direction": direction,
+                "entry_time": entry_time.isoformat(),
+                "probability": probability,
+                "reason": reason,
+                "agent_id": AGENT_ID
+            }
+        }
+        await self.ws.send(json.dumps(payload))
+
     async def run(self):
         async with async_playwright() as p:
             self.browser = await p.chromium.launch(headless=True)
@@ -46,7 +62,21 @@ class NexusNavigator:
                 pair = await switcher.switch_to_next_pair()
                 img_b64 = await capturer.capture_chart()
                 await self.send_frame(pair, img_b64)
-                # Intervalo entre pares, ajuste conforme necessidade
+
+                # Exemplo de envio de sinal antecipado (substituir pela lógica real)
+                now_br = datetime.now(BR_TZ)
+                minute = (now_br.minute // 5 + 1) * 5
+                if minute == 60:
+                    entry_time = now_br.replace(hour=now_br.hour+1, minute=0, second=0, microsecond=0)
+                else:
+                    entry_time = now_br.replace(minute=minute, second=0, microsecond=0)
+
+                direction = "call"
+                probability = 0.75
+                reason = "fluxo + rompimento"
+
+                await self.send_signal(pair, direction, entry_time, probability, reason)
+
                 await asyncio.sleep(10)
 
 if __name__ == "__main__":
