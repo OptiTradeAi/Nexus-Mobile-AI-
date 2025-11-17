@@ -1,9 +1,10 @@
 fastapi
-uvicorn
+uvicorn[standard]
 websockets
+pillow
 numpy
 pandas
 pytz
 python-dotenv
-pillow
-python-multipart
+sqlalchemy
+aiofiles
