@@ -1,27 +1,105 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Nexus Mobile AI Viewer</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #1a1a2e; color: #e0e0e0; display: flex; flex-direction: column; align-items: center; }
-        #header { width: 100%; background-color: #0f0f1a; padding: 10px 0; text-align: center; border-bottom: 1px solid #333; }
-        #header h1 { margin: 0; color: #e0e0e0; }
-        #status { margin: 10px 0; font-size: 0.9em; color: #aaa; }
-        #image-container { margin-top: 20px; border: 2px solid #333; border-radius: 8px; overflow: hidden; max-width: 90%; }
-        #stream-image { width: 100%; height: auto; display: block; }
-        #signal-info { background-color: #2a2a4a; border: 1px solid #444; border-radius: 8px; padding: 15px; margin-top: 20px; width: 90%; max-width: 600px; }
-        #signal-info h2 { color: #8aff8a; margin-top: 0; }
-        #signal-info p { margin: 5px 0; }
-        .signal-item { border-bottom: 1px dashed #555; padding-bottom: 10px; margin-bottom: 10px; }
-        .signal-item:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
-        .signal-direction.call { color: #00ff00; font-weight: bold; }
-        .signal-direction.put { color: #ff0000; font-weight: bold; }
-        .signal-probability { color: #8aff8a; }
-        .signal-reason { font-style: italic; color: #ccc; }
-        #log-container { background-color: #0f0f1a; border: 1px solid #333; border-radius: 8px; padding: 10px; margin-top: 20px; width: 90%; max-width: 600px; max-height: 200px; overflow-y: scroll; font-size: 0.8em; color: #777; }
-        .log-entry { margin-bottom: 3px; }
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #1a1a2e;
+            color: #e0e0e0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        #header {
+            width: 100%;
+            background-color: #0f0f1a;
+            padding: 10px 0;
+            text-align: center;
+            border-bottom: 1px solid #333;
+        }
+        #header h1 {
+            margin: 0;
+            color: #e0e0e0;
+        }
+        #status {
+            margin: 10px 0;
+            font-size: 0.9em;
+            color: #aaa;
+        }
+        #image-container {
+            margin-top: 20px;
+            border: 2px solid #333;
+            border-radius: 8px;
+            overflow: hidden;
+            max-width: 90%;
+        }
+        #stream-image {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        #signal-info {
+            background-color: #2a2a4a;
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 20px;
+            width: 90%;
+            max-width: 600px;
+        }
+        #signal-info h2 {
+            color: #8aff8a;
+            margin-top: 0;
+        }
+        #signal-info p {
+            margin: 5px 0;
+        }
+        .signal-item {
+            border-bottom: 1px dashed #555;
+            padding-bottom: 10px;
+            margin-bottom: 10px;
+        }
+        .signal-item:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+        .signal-direction.call {
+            color: #00ff00;
+            font-weight: bold;
+        }
+        .signal-direction.put {
+            color: #ff0000;
+            font-weight: bold;
+        }
+        .signal-probability {
+            color: #8aff8a;
+        }
+        .signal-reason {
+            font-style: italic;
+            color: #ccc;
+        }
+        #log-container {
+            background-color: #0f0f1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 10px;
+            margin-top: 20px;
+            width: 90%;
+            max-width: 600px;
+            max-height: 200px;
+            overflow-y: scroll;
+            font-size: 0.8em;
+            color: #777;
+        }
+        .log-entry {
+            margin-bottom: 3px;
+        }
     </style>
 </head>
 <body>
@@ -30,7 +108,7 @@
     </div>
     <div id="status">Conectando...</div>
     <div id="image-container">
-        <img id="stream-image" src="https://placehold.co/600x400?text=Aguardando+frames..." alt="Stream Image">
+        <img id="stream-image" src="https://placehold.co/600x400?text=Aguardando+frames..." alt="Stream Image" />
     </div>
     <div id="signal-info">
         <h2>Último Sinal:</h2>
@@ -42,8 +120,8 @@
     </div>
 
     <script>
-        const backendUrl = "wss://nexus-mobile-ai.onrender.com"; // <-- ATENÇÃO: Substitua pela URL do seu serviço na Render
-        const wsStreamUrl = `${backendUrl.replace('https', 'wss')}/ws/viewer`;
+        const backendUrl = "https://nexus-mobile-ai.onrender.com";
+        const wsStreamUrl = backendUrl.replace(/^http/, 'ws') + "/ws/viewer";
         const statusDiv = document.getElementById('status');
         const streamImage = document.getElementById('stream-image');
         const lastSignalContent = document.getElementById('last-signal-content');
@@ -53,8 +131,8 @@
             const logEntry = document.createElement('div');
             logEntry.className = 'log-entry';
             logEntry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
-            logsDiv.prepend(logEntry); // Adiciona no início para ver os mais recentes
-            if (logsDiv.children.length > 50) { // Limita o número de logs
+            logsDiv.prepend(logEntry);
+            if (logsDiv.children.length > 50) {
                 logsDiv.removeChild(logsDiv.lastChild);
             }
         }
