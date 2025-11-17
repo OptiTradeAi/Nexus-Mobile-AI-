@@ -1,5 +1,4 @@
-# Dockerfile para Nexus Mobile AI Backend (Render)
-
+# Use imagem oficial Python slim
 FROM python:3.11-slim
 
 # Define diretório de trabalho
@@ -32,29 +31,20 @@ RUN apt-get update && apt-get install -y \
     libxfixes3 \
     libxrender1 \
     libx11-6 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxrandr2 \
-    libgbm1 \
-    libasound2 \
-    libatk1.0-0 \
     libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxkbcommon0 \
-    libnss3 \
     libxss1 \
     libxtst6 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copia todos os arquivos para dentro do container
-COPY . .
+# Copia os arquivos do projeto para dentro do container
+COPY backend/ ./backend/
+COPY requirements.txt .
 
 # Instala as dependências Python
-RUN pip install --no-cache-dir -r ./backend/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Instala Playwright e seus navegadores
-RUN pip install --no-cache-dir playwright websockets pytz
+RUN pip install --no-cache-dir playwright
 RUN playwright install
 
 # Define timezone para Brasília
