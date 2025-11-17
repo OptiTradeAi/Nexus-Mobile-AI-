@@ -1,10 +1,8 @@
-fastapi
-uvicorn[standard]
-websockets
-pillow
+fastapi>=0.70.0
+uvicorn[standard]>=0.18.0
+websockets>=10.0
 numpy
 pandas
 pytz
 python-dotenv
-sqlalchemy
-aiofiles
+pillow
