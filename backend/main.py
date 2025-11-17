@@ -27,9 +27,10 @@ if str(backend_path) not in sys.path:
 
 try:
     from backend.ai_engine_fusion import analyze_frame_with_meta, register_entry
-    log.info("✅ Import backend.ai_engine_fusion OK")
+    from backend.ws_router import router as ws_router
+    log.info("✅ Import backend.ai_engine_fusion and ws_router OK")
 except Exception as e:
-    log.error("❌ Import backend.ai_engine_fusion FAILED", exc_info=True)
+    log.error("❌ Import failed", exc_info=True)
     raise
 
 app = FastAPI(title="Nexus Mobile AI Stream Server")
@@ -47,6 +48,9 @@ STATIC_DIR = os.path.join(backend_path, "static")
 os.makedirs(STATIC_DIR, exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+# Include WebSocket router
+app.include_router(ws_router)
+
 @app.get("/")
 async def root():
     return {
@@ -60,217 +64,33 @@ async def root():
 async def health():
     return {"status": "ok", "time": datetime.now(TZ).isoformat()}
 
-stream_clients = set()
-viewer_clients = set()
-DEBUG_SAVE_PATH = os.path.join(STATIC_DIR, "latest_frame.webp")
-
-@app.websocket("/ws/stream")
-async def websocket_stream_endpoint(websocket: WebSocket, token: str = Query(None)):
-    await websocket.accept()
-    stream_clients.add(websocket)
-    client_addr = getattr(websocket.client, "host", "unknown")
-    print(f"🟢 Streamer conectado: {client_addr}")
-
+@app.post("/agent/frame")
+async def receive_frame(data: dict = Body(...)):
+    """
+    Endpoint para receber frames do Selenium Agent via POST
+    """
     try:
-        while True:
-            msg = await websocket.receive()
-            frame_b64 = None
-            mime = "image/webp"
-            pair = "AUTO"
-            payload = None
+        pair = data.get("pair")
+        frame_b64 = data.get("frame")
+        if not pair or not frame_b64:
+            return {"ok": False, "error": "pair or frame missing"}
 
-            if "text" in msg and msg["text"]:
-                try:
-                    payload = json.loads(msg["text"])
-                except Exception as e:
-                    print("⚠️ JSON inválido recebido no stream:", e)
-                    continue
+        # Salvar frame para debug
+        frame_path = os.path.join(STATIC_DIR, f"latest_{pair.replace('/', '_')}.webp")
+        with open(frame_path, "wb") as f:
+            f.write(base64.b64decode(frame_b64))
 
-                if payload.get("type") == "entry":
-                    try:
-                        res = register_entry(payload)
-                        print(f"🔔 Entry registrada pelo streamer: {payload.get('pair')} result={res}")
-                    except Exception as e:
-                        print("⚠️ Erro ao registrar entry:", e)
-                    continue
+        # Analisar frame
+        analysis = analyze_frame_with_meta({"pair": pair, "data": frame_b64, "timestamp": datetime.now(TZ).isoformat()})
 
-                if payload.get("type") == "frame" and payload.get("data"):
-                    frame_b64 = payload.get("data")
-                    mime = payload.get("mime", mime)
-                    pair = payload.get("pair", pair)
-                    print(f"📥 Frame recebido (texto) pair={pair} size={len(frame_b64)}")
-                else:
-                    if payload.get("type") == "tick":
-                        try:
-                            analysis_result = analyze_frame_with_meta(payload)
-                            analysis = analysis_result.get("analysis") if isinstance(analysis_result, dict) else None
-                            if analysis and isinstance(analysis, dict) and "signal" in analysis:
-                                signal_payload = analysis["signal"]
-                                for s in list(stream_clients):
-                                    try:
-                                        await s.send_text(json.dumps({"type": "signal", "signal": signal_payload}))
-                                    except Exception:
-                                        try:
-                                            stream_clients.remove(s)
-                                        except:
-                                            pass
-                        except Exception as e:
-                            print("⚠️ analyze_frame_with_meta(tick) gerou erro:", e)
-                    continue
-
-            elif "bytes" in msg and msg["bytes"]:
-                try:
-                    frame_bytes = msg["bytes"]
-                    frame_b64 = base64.b64encode(frame_bytes).decode("utf-8")
-                    mime = "image/webp"
-                    print(f"📥 Frame recebido (bytes) size={len(frame_bytes)}")
-                    payload = {"type": "frame", "data": frame_b64, "mime": mime, "pair": pair, "timestamp": datetime.now(TZ).isoformat()}
-                except Exception as e:
-                    print("⚠️ Erro ao tratar bytes do stream:", e)
-                    continue
-            else:
-                await asyncio.sleep(0.001)
-                continue
-
-            if not frame_b64:
-                await asyncio.sleep(0.001)
-                continue
-
-            try:
-                with open(DEBUG_SAVE_PATH, "wb") as f:
-                    f.write(base64.b64decode(frame_b64))
-                print(f"💾 Debug: frame salvo em {DEBUG_SAVE_PATH}")
-            except Exception as e:
-                print("⚠️ Falha ao salvar debug frame:", e)
-
-            try:
-                if payload is None:
-                    payload = {"type": "frame", "data": frame_b64, "mime": mime, "pair": pair, "timestamp": datetime.now(TZ).isoformat()}
-                analysis_result = analyze_frame_with_meta(payload)
-            except Exception as e:
-                analysis_result = {"ok": False, "error": str(e)}
-                print("⚠️ analyze_frame_with_meta gerou erro:", e)
-
-            packet = {
-                "type": "frame",
-                "data": frame_b64,
-                "mime": mime,
-                "pair": pair,
-                "timestamp": payload.get("timestamp", datetime.now(TZ).isoformat()),
-                "analysis": analysis_result.get("analysis") if isinstance(analysis_result, dict) else analysis_result
-            }
-
-            for v in list(viewer_clients):
-                try:
-                    await v.send_json(packet)
-                except Exception as e:
-                    print("🔴 Erro enviando para viewer, removendo:", e)
-                    try:
-                        viewer_clients.remove(v)
-                    except:
-                        pass
-
-            try:
-                analysis = analysis_result.get("analysis") if isinstance(analysis_result, dict) else None
-                if analysis and isinstance(analysis, dict) and "signal" in analysis:
-                    signal_payload = analysis["signal"]
-                    for s in list(stream_clients):
-                        try:
-                            await s.send_text(json.dumps({"type": "signal", "signal": signal_payload}))
-                        except Exception:
-                            try:
-                                stream_clients.remove(s)
-                            except:
-                                pass
-            except Exception as e:
-                print("⚠️ Erro ao encaminhar signal para streamers:", e)
-
-            await asyncio.sleep(0.001)
-
+        return {"ok": True, "analysis": analysis}
     except Exception as e:
-        print("❌ Erro no websocket stream:", e)
-    finally:
-        try:
-            stream_clients.remove(websocket)
-        except:
-            pass
+        return {"ok": False, "error": str(e)}
 
-
-@app.websocket("/ws/viewer")
-async def websocket_viewer_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    viewer_clients.add(websocket)
-    client_addr = getattr(websocket.client, "host", "unknown")
-    print(f"🟢 Viewer conectado: {client_addr}")
-
-    try:
-        while True:
-            try:
-                msg = await websocket.receive_text()
-                try:
-                    j = json.loads(msg)
-                except:
-                    continue
-                if j.get("type") == "command_to_stream":
-                    cmd_payload = j.get("command", {})
-                    for s in list(stream_clients):
-                        try:
-                            await s.send_text(json.dumps(cmd_payload))
-                        except Exception:
-                            try:
-                                stream_clients.remove(s)
-                            except:
-                                pass
-                await asyncio.sleep(0.1)
-            except Exception:
-                await asyncio.sleep(0.1)
-    except Exception as e:
-        print("❌ Erro no websocket viewer:", e)
-    finally:
-        try:
-            viewer_clients.remove(websocket)
-        except:
-            pass
-
-
-@app.get("/viewer")
-async def get_viewer_page():
-    p = os.path.join(STATIC_DIR, "viewer.html")
-    if os.path.isfile(p):
-        return FileResponse(p, media_type="text/html")
-    return JSONResponse({"error": "viewer.html não encontrado"}, status_code=404)
-
-
-@app.post("/control/pairs")
-async def control_pairs(body: dict = Body(...)):
-    pairs = body.get("pairs", [])
-    interval = int(body.get("interval", 2000))
-    cmd = {"type": "command", "cmd": "set_pairs", "pairs": pairs, "interval": interval}
-    sent = 0
-    for s in list(stream_clients):
-        try:
-            await s.send_text(json.dumps(cmd))
-            sent += 1
-        except Exception:
-            try:
-                stream_clients.remove(s)
-            except:
-                pass
-    return {"sent_to_streamers": sent, "pairs_count": len(pairs)}
-
-
-@app.post("/control/command")
-async def control_command(body: dict = Body(...)):
-    cmd_body = body.copy()
-    cmd = {"type": "command", "cmd": cmd_body.get("cmd"), **({k: v for k, v in cmd_body.items() if k != "cmd"})}
-    sent = 0
-    for s in list(stream_clients):
-        try:
-            await s.send_text(json.dumps(cmd))
-            sent += 1
-        except Exception:
-            try:
-                stream_clients.remove(s)
-            except:
-                pass
-    return {"sent": sent, "cmd": cmd}
+@app.post("/agent/heartbeat")
+async def agent_heartbeat(data: dict = Body(...)):
+    """
+    Endpoint para receber heartbeat do Selenium Agent
+    """
+    # Aqui você pode atualizar status do agente, logs, etc.
+    return {"ok": True, "message": "heartbeat recebido"}
