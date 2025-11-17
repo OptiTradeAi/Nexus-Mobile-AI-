@@ -1,41 +1,21 @@
-import os
-import sys
-import json
-import base64
-import logging
-import asyncio
-from pathlib import Path
-from datetime import datetime
-import pytz
-
-from fastapi import FastAPI, WebSocket, Query, Body
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from pathlib import Path
+import json
+import pytz
+import asyncio
+from datetime import datetime
 
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("startup")
+# Import AI engine module
+from .ai_engine_fusion import analyze_frame, get_logs
 
-log.info("=== Nexus Mobile AI Startup Debug Info ===")
-log.info(f"CWD: {os.getcwd()}")
-log.info(f"PYTHONPATH (first 10): {sys.path[:10]}")
-
-backend_path = Path(__file__).parent.resolve()
-if str(backend_path) not in sys.path:
-    sys.path.insert(0, str(backend_path))
-    log.info(f"Added to sys.path: {backend_path}")
-
-try:
-    from backend.ai_engine_fusion import analyze_frame_with_meta, register_entry
-    from backend.ws_router import router as ws_router
-    log.info("✅ Import backend.ai_engine_fusion and ws_router OK")
-except Exception as e:
-    log.error("❌ Import failed", exc_info=True)
-    raise
-
-app = FastAPI(title="Nexus Mobile AI Stream Server")
 TZ = pytz.timezone("America/Sao_Paulo")
 
+app = FastAPI(title="Nexus Mobile AI - Backend")
+
+# ---------------- CORS ----------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,53 +24,99 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-STATIC_DIR = os.path.join(backend_path, "static")
-os.makedirs(STATIC_DIR, exist_ok=True)
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+# --------------- STATIC FILES ---------------
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
-# Include WebSocket router
-app.include_router(ws_router)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+
+# --------------- ROUTES ---------------
 @app.get("/")
-async def root():
+def root():
     return {
         "status": "Nexus Mobile AI ativo",
-        "viewer_url": "/static/viewer.html",
-        "stream_ws": "/ws/stream",
-        "viewer_ws": "/ws/viewer"
+        "viewer": "/static/viewer.html",
+        "ws_stream": "/ws/stream",
+        "ws_viewer": "/ws/viewer"
     }
 
 @app.get("/health")
-async def health():
-    return {"status": "ok", "time": datetime.now(TZ).isoformat()}
+def health():
+    return {"ok": True, "time": datetime.now(TZ).isoformat()}
 
-@app.post("/agent/frame")
-async def receive_frame(data: dict = Body(...)):
-    """
-    Endpoint para receber frames do Selenium Agent via POST
-    """
+
+# --------------- WEBSOCKETS ---------------
+STREAM_CLIENTS = set()
+VIEWER_CLIENTS = set()
+LAST_FRAME = None
+LOCK = asyncio.Lock()
+
+
+@app.websocket("/ws/stream")
+async def ws_stream(websocket: WebSocket):
+    """Recebe frames da extensão ou do selenium agent."""
+    await websocket.accept()
+    STREAM_CLIENTS.add(websocket)
+
     try:
-        pair = data.get("pair")
-        frame_b64 = data.get("frame")
-        if not pair or not frame_b64:
-            return {"ok": False, "error": "pair or frame missing"}
+        while True:
+            message = await websocket.receive_text()
+            payload = json.loads(message)
 
-        # Salvar frame para debug
-        frame_path = os.path.join(STATIC_DIR, f"latest_{pair.replace('/', '_')}.webp")
-        with open(frame_path, "wb") as f:
-            f.write(base64.b64decode(frame_b64))
+            if payload.get("type") != "frame":
+                continue
 
-        # Analisar frame
-        analysis = analyze_frame_with_meta({"pair": pair, "data": frame_b64, "timestamp": datetime.now(TZ).isoformat()})
+            frame_b64 = payload.get("data")
+            mime = payload.get("mime", "image/webp")
+            pair = payload.get("pair", "AUTO")
 
-        return {"ok": True, "analysis": analysis}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+            analysis = analyze_frame(frame_b64, mime=mime, pair=pair)
 
-@app.post("/agent/heartbeat")
-async def agent_heartbeat(data: dict = Body(...)):
-    """
-    Endpoint para receber heartbeat do Selenium Agent
-    """
-    # Aqui você pode atualizar status do agente, logs, etc.
-    return {"ok": True, "message": "heartbeat recebido"}
+            global LAST_FRAME
+            async with LOCK:
+                LAST_FRAME = {
+                    "data": frame_b64,
+                    "mime": mime,
+                    "pair": pair,
+                    "analysis": analysis,
+                    "ts": datetime.now(TZ).isoformat()
+                }
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        STREAM_CLIENTS.discard(websocket)
+
+
+@app.websocket("/ws/viewer")
+async def ws_viewer(websocket: WebSocket):
+    """Envia frames atualizados para o painel visual."""
+    await websocket.accept()
+    VIEWER_CLIENTS.add(websocket)
+
+    try:
+        if LAST_FRAME:
+            await websocket.send_json({"type": "frame", **LAST_FRAME})
+
+        while True:
+            await asyncio.sleep(0.4)
+            if LAST_FRAME:
+                await websocket.send_json({"type": "frame", **LAST_FRAME})
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        VIEWER_CLIENTS.discard(websocket)
+
+
+@app.get("/viewer")
+def viewer():
+    html = (STATIC_DIR / "viewer.html").read_text(encoding="utf-8")
+    return HTMLResponse(html)
+
+
+@app.get("/admin/logs")
+def logs():
+    return get_logs()
